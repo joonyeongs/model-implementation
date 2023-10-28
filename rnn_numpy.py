@@ -4,6 +4,20 @@ def softmax(x):
     #Prevent exp from exploding
     return np.exp(x - np.max(x))/np.sum(np.exp(x - np.max(x)), axis=0)
 
+def make_batch():
+    input_batch = []
+    target_batch = []
+
+    for sentence in sentences:
+        word = sentence.split()  
+        input = [word_dict[n] for n in word[:-1]]  # create (1~n-1) as input
+        target = [word_dict[n] for n in word[1:]]  # create (n) (2~n) as input
+
+        input_batch.append(np.eye(input_dim)[input])
+        target_batch.append(np.eye(output_dim)[target])
+
+    return input_batch, target_batch
+
 class RNN:
     def __init__(self, input_dim, hidden_dim, output_dim, time_step):
         self.input_dim = input_dim
@@ -90,32 +104,27 @@ class RNN:
 
 
 if __name__ == "__main__":
-    batch_size = 5
     time_step = 4
-    input_dim = 5
     hidden_dim = 4
-    output_dim = 3
 
-    rnn = RNN(input_dim, hidden_dim, output_dim, time_step)
+    sentences = ["i like to drink coffee", "i have a morning routine", "too expensive for a coffee"]
 
-    sequence = np.random.randn(batch_size, time_step, input_dim)
+    word_list = " ".join(sentences).split()
+    word_list = list(set(word_list))
+    word_dict = {w: i for i, w in enumerate(word_list)}
+    input_dim = output_dim = len(word_dict)
+    batch_size = len(sentences)
+    input_batch, target_batch = make_batch()
+    
     total_loss = np.zeros((batch_size, time_step))
 
-    # Generate random one-hot vectors for output
-    targets = np.zeros((batch_size, time_step, output_dim))
-
-    for i in range(batch_size):
-        for j in range(time_step):
-            # Generate a random index for the one-hot vector
-            index = np.random.randint(output_dim)
-            # Create the one-hot vector
-            targets[i, j, index] = 1
+    rnn = RNN(input_dim, hidden_dim, output_dim, time_step)
 
 
     for epoch in range(1000):
         for n in range(batch_size):
-            x = sequence[n]         #one sequence
-            target = targets[n]
+            x = input_batch[n]         #one sequence
+            target = target_batch[n]
 
             y = rnn.forward(x)      #Predicted value for each time step of the sequence
             
