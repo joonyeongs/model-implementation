@@ -87,7 +87,7 @@ class RNN:
         d_b_h = d_b_h.reshape(-1)
 
          # Clip gradients to prevent exploding gradients (optional)
-        clip_value = 5.0  # You can adjust this value as needed
+        clip_value = 5.0  # Any value above 5.0 is considered exploding
         for dparam in [d_W_x, d_W_h, d_W_y, d_b_h, d_b_y]:
             np.clip(dparam, -clip_value, clip_value, out=dparam)
 
