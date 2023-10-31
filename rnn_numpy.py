@@ -10,11 +10,11 @@ def make_batch():
 
     for sentence in sentences:
         word = sentence.split()  
-        input = [word_dict[n] for n in word[:-1]]  # create (1~n-1) as input
-        target = [word_dict[n] for n in word[1:]]  # create (n) (2~n) as input
+        input_sentence = [word_dict[n] for n in word[:-1]]  # create (1~n-1) as input
+        target_sentence = [word_dict[n] for n in word[1:]]  # create (2~n) as input
 
-        input_batch.append(np.eye(input_dim)[input])
-        target_batch.append(np.eye(output_dim)[target])
+        input_batch.append(np.eye(input_dim)[input_sentence])
+        target_batch.append(np.eye(output_dim)[target_sentence])
 
     return input_batch, target_batch
 
@@ -37,8 +37,8 @@ class RNN:
         self.h = np.zeros((time_step, hidden_dim)) 
 
         # Store intermediate values for backpropagation
-        self.xs = []
-        self.hs = []
+        self.x_store = []
+        self.h_store = []
 
     # Input : Each sequence
     # Output : Predicted value for each time step
@@ -56,8 +56,8 @@ class RNN:
             y[t] = softmax(y[t])
 
             # Store intermediate values
-            self.xs.append(x[t].reshape(-1,1))
-            self.hs.append(self.h[t].reshape(-1,1))
+            self.x_store.append(x[t].reshape(-1,1))
+            self.h_store.append(self.h[t].reshape(-1,1))
 
         return y
 
@@ -74,13 +74,13 @@ class RNN:
         for t in reversed(range(time_step)):
             dy = d_y[t]
             dy = dy.reshape(-1,1)
-            d_W_y += np.dot(dy, self.hs[t].T)
+            d_W_y += np.dot(dy, self.h_store[t].T)
             d_b_y += dy
             dh = np.dot(self.W_y.T, dy) + d_h_next
-            dh_tanh = (1 - self.hs[t] ** 2) * dh  # Gradient through tanh
+            dh_tanh = (1 - self.h_store[t] ** 2) * dh  # Gradient through tanh
             d_b_h += dh_tanh
-            d_W_x += np.dot(dh_tanh, self.xs[t].T)
-            d_W_h += np.dot(dh_tanh, self.hs[t - 1].T) if t > 0 else np.zeros_like(self.W_h)
+            d_W_x += np.dot(dh_tanh, self.x_store[t].T)
+            d_W_h += np.dot(dh_tanh, self.h_store[t - 1].T) if t > 0 else np.zeros_like(self.W_h)
             d_h_next = np.dot(self.W_h.T, dh_tanh)
 
         d_b_y = d_b_y.reshape(-1)
@@ -99,16 +99,20 @@ class RNN:
         self.b_y -= self.learning_rate * d_b_y
 
         # Reset stored values for the next iteration
-        self.xs = []
-        self.hs = []
+        self.x_store = []
+        self.h_store = []
 
 
 if __name__ == "__main__":
     time_step = 4
     hidden_dim = 4
 
+    # Input sentences
+    # Initialize toy dataset as row vectors
+    # Change to column vectors for calculation
     sentences = ["i like to drink coffee", "i have a morning routine", "too expensive for a coffee"]
 
+    # Create batch
     word_list = " ".join(sentences).split()
     word_list = list(set(word_list))
     word_dict = {w: i for i, w in enumerate(word_list)}
@@ -123,19 +127,18 @@ if __name__ == "__main__":
 
     for epoch in range(1000):
         for n in range(batch_size):
-            x = input_batch[n]         #one sequence
+            sentence = input_batch[n]        # Input sequence
             target = target_batch[n]
 
-            y = rnn.forward(x)      #Predicted value for each time step of the sequence
-            
-            # One-hot vector
+            y = rnn.forward(sentence)      # Predicted value for each time step of the sequence
+            d_y = y - target               # Loss for each time step of the sequence
+            rnn.backward(d_y)           
+
+            # Compute total loss
             loss = 0
             for t in range(time_step):
                 index = np.where(target[t] == 1)[0]
                 loss += -np.log(y[t][index])
-
-            d_y = y - target    
-            rnn.backward(d_y)   # d_y for each timestep
 
         if (epoch + 1) % 100 == 0:
             print(f"Epoch {epoch + 1}, Loss: {loss / time_step}")
