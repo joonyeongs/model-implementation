@@ -29,7 +29,7 @@ def tokenize_and_split(raw_text_iter: dataset.IterableDataset, total_samples: in
            
     return data
 
-def create_batch_from_dataloader(text_data_tensor: Tensor, batch_size: int) -> DataLoader:
+def create_dataloader_from_text_data(text_data_tensor: Tensor, batch_size: int) -> DataLoader:
     dataset = TensorDataset(text_data_tensor)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
@@ -77,7 +77,7 @@ if __name__ == "__main__":
     train_data = tokenize_and_split(train_iter, total_samples)
     #val_data = tokenize_and_split(val_iter, total_samples)
     #test_data = tokenize_and_split(test_iter, total_samples)
-    train_dataloader = create_batch_from_dataloader(train_data, batch_size)
+    train_dataloader = create_dataloader_from_text_data(train_data, batch_size)
     '''
     Check the output of the dataloader
 
@@ -103,7 +103,7 @@ if __name__ == "__main__":
             loss.backward()
             optimizer.step()
 
-        if (epoch + 1) % 1000 == 0:
+        if (epoch + 1) % 100 == 0:
             print('Epoch:', '%04d' % (epoch + 1), 'cost =', '{:.6f}'.format(loss))
 
     # Predict
