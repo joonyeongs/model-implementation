@@ -13,7 +13,7 @@ from torch.utils.data import TensorDataset, DataLoader, dataset
 
 
 
-def tokenize_and_split(raw_text_iter: dataset.IterableDataset, total_samples: int) -> Tensor:
+def tokenize_and_split(raw_text_iter: dataset.IterableDataset, length_of_sequence: int) -> Tensor:
     """
     1. Tokenize and convert raw text into a list of tensors, where each tensor represents a sequence of tokens
     2. Eliminate empty tensors and concatenate into a single tensor
@@ -23,7 +23,7 @@ def tokenize_and_split(raw_text_iter: dataset.IterableDataset, total_samples: in
     data = [torch.tensor(vocab(tokenizer(item)), dtype=torch.long) for item in raw_text_iter]
     data = torch.cat(tuple(filter(lambda t: t.numel() > 0, data)))
 
-    length_of_sequence = data.shape[0] // total_samples 
+    total_samples = data.shape[0] // length_of_sequence 
     data = data[:length_of_sequence * total_samples]                       
     data = data.view(total_samples, length_of_sequence)   
            
@@ -38,22 +38,23 @@ def create_dataloader_from_text_data(text_data_tensor: Tensor, batch_size: int) 
                      
 class NeuralNetwork(nn.Module):
     def __init__(self):
-        super(NeuralNetwork).__init__()
+        super(NeuralNetwork, self).__init__()
         """
         y = b + Wx + U * tanh(d + Hx)
         """
+        self.n_steps = length_of_sequence - 1
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
-        self.h = nn.Linear(n_steps * embedding_dim, n_hidden, bias=False)
+        self.h = nn.Linear(self.n_steps * embedding_dim, n_hidden, bias=False)
         self.d = nn.Parameter(torch.ones(n_hidden))
         self.tanh = nn.Tanh()
         self.u = nn.Linear(n_hidden, vocab_size, bias=False)
-        self.w = nn.Linear(n_steps * embedding_dim, vocab_size, bias=False)
+        self.w = nn.Linear(self.n_steps * embedding_dim, vocab_size, bias=False)
         self.b = nn.Parameter(torch.ones(vocab_size))
         self.softmax = nn.Softmax()
 
     def forward(self, x):
         x = self.embedding(x)
-        x = x.view(-1, n_steps * embedding_dim)     # need to check this
+        x = x.view(-1, self.n_steps * embedding_dim)     # need to check this
         tanh = self.tanh(self.d + self.h(x))
         y = self.b + self.w(x) + self.u(tanh)
         return y
@@ -61,9 +62,8 @@ class NeuralNetwork(nn.Module):
 
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    embedding_dim = 1000
-    total_samples = 10000
-    n_steps = 5
+    embedding_dim = 100
+    length_of_sequence = 20
     n_hidden = 10
     batch_size = 64
 
@@ -74,18 +74,13 @@ if __name__ == "__main__":
     vocab_size = len(vocab)
     
     train_iter, val_iter, test_iter = WikiText2()
-    train_data = tokenize_and_split(train_iter, total_samples)
-    #val_data = tokenize_and_split(val_iter, total_samples)
-    #test_data = tokenize_and_split(test_iter, total_samples)
+    train_data = tokenize_and_split(train_iter, length_of_sequence)
+    test_data = tokenize_and_split(test_iter, length_of_sequence)
+    train_data, test_data = train_data[:1000, :], test_data[:1000, :]
     train_dataloader = create_dataloader_from_text_data(train_data, batch_size)
-    '''
-    Check the output of the dataloader
-
-    for batch in train_dataloader:
-        print(batch[0][:, -1])
-        print(batch[0][:, -1].view(-1, 1))
-        break
-    '''
+    test_dataloader = create_dataloader_from_text_data(test_data, batch_size)
+   
+    
     # Training
     model = NeuralNetwork().to(device)
     criterion = nn.CrossEntropyLoss()
@@ -106,9 +101,24 @@ if __name__ == "__main__":
         if (epoch + 1) % 100 == 0:
             print('Epoch:', '%04d' % (epoch + 1), 'cost =', '{:.6f}'.format(loss))
 
-    # Predict
-
     # Test
+    size = len(test_dataloader.dataset)
+    num_batches = len(test_dataloader)
+    test_loss, correct = 0, 0
+    
+    with torch.no_grad():
+        for batch in test_dataloader:
+            input_batch, target_batch = batch[0][:, :-1], batch[0][:, -1]
+            input_batch = input_batch.to(device)
+            target_batch = target_batch.to(device)
+
+            output = model(input_batch)
+            loss = criterion(output.argmax(1), target_batch)
+            correct += (output.argmax(1) == target_batch).type(torch.float).sum().item()
+
+    test_loss /= num_batches
+    correct /= size
+    print(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n")
     
 
         
