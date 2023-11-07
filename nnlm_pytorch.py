@@ -1,6 +1,9 @@
 # Description: Neural Network Language Model in PyTorch
 # conda install -c anaconda chardet
 # conda install -c conda-forge portalocker
+# conda install -c pytorch torchtext
+# conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia
+
 import os
 import torch
 from torch import nn
@@ -11,7 +14,15 @@ from torchtext.vocab import build_vocab_from_iterator
 from torch import nn, Tensor
 from torch.utils.data import TensorDataset, DataLoader, dataset
 
+def create_vocab_from_text_data() -> tuple:
+    data_for_dict = WikiText2(split='train')    
+    tokenizer = get_tokenizer('basic_english')
+    vocab = build_vocab_from_iterator(map(tokenizer, data_for_dict), specials=['<unk>'])
+    vocab.set_default_index(vocab['<unk>'])
+    vocab_size = len(vocab)
 
+    return vocab, vocab_size, tokenizer
+    
 
 def tokenize_and_split(raw_text_iter: dataset.IterableDataset, length_of_sequence: int) -> Tensor:
     """
@@ -33,9 +44,34 @@ def create_dataloader_from_text_data(text_data_tensor: Tensor, batch_size: int) 
     dataset = TensorDataset(text_data_tensor)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-    return dataloader 
+    return dataloader
 
-                     
+def split_batch_into_input_and_target(batch: list) -> tuple:
+    input_batch, target_batch = batch[0][:, :-1], batch[0][:, -1]
+    input_batch = input_batch.to(device)
+    target_batch = target_batch.to(device)
+    return input_batch, target_batch
+
+def train():
+    for batch in train_dataloader:
+        input_batch, target_batch = split_batch_into_input_and_target(batch)
+
+        optimizer.zero_grad()
+        output = model(input_batch)
+        train_loss = criterion(output, target_batch)
+        train_loss.backward()
+        optimizer.step()
+
+
+def test():
+    for batch in test_dataloader:
+        input_batch, target_batch = split_batch_into_input_and_target(batch)
+
+        output = model(input_batch)
+        loss = criterion(output, target_batch)
+        test_loss += loss.item()
+        correct += (output.argmax(1) == target_batch).type(torch.float).sum().item()
+
 class NeuralNetwork(nn.Module):
     def __init__(self):
         super(NeuralNetwork, self).__init__()
@@ -67,19 +103,16 @@ if __name__ == "__main__":
     n_hidden = 10
     batch_size = 64
 
-    data_for_dict = WikiText2(split='train')    
-    tokenizer = get_tokenizer('basic_english')
-    vocab = build_vocab_from_iterator(map(tokenizer, data_for_dict), specials=['<unk>'])
-    vocab.set_default_index(vocab['<unk>'])
-    vocab_size = len(vocab)
+    vocab, vocab_size, tokenizer = create_vocab_from_text_data()
     
-    train_iter, val_iter, test_iter = WikiText2()
+    train_iter, test_iter = WikiText2(split='train'), WikiText2(split='test')
     train_data = tokenize_and_split(train_iter, length_of_sequence)
     test_data = tokenize_and_split(test_iter, length_of_sequence)
     train_data, test_data = train_data[:1000, :], test_data[:1000, :]
     train_dataloader = create_dataloader_from_text_data(train_data, batch_size)
     test_dataloader = create_dataloader_from_text_data(test_data, batch_size)
    
+
     
     # Training
     model = NeuralNetwork().to(device)
@@ -87,19 +120,11 @@ if __name__ == "__main__":
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
     for epoch in range(1000):
-        for batch in train_dataloader:
-            input_batch, target_batch = batch[0][:, :-1], batch[0][:, -1]
-            input_batch = input_batch.to(device)
-            target_batch = target_batch.to(device)
-
-            optimizer.zero_grad()
-            output = model(input_batch)
-            loss = criterion(output, target_batch)
-            loss.backward()
-            optimizer.step()
+        train_loss = 0
+        train()
 
         if (epoch + 1) % 100 == 0:
-            print('Epoch:', '%04d' % (epoch + 1), 'cost =', '{:.6f}'.format(loss))
+            print('Epoch:', '%04d' % (epoch + 1), 'cost =', '{:.6f}'.format(train_loss))
 
     # Test
     size = len(test_dataloader.dataset)
@@ -107,14 +132,7 @@ if __name__ == "__main__":
     test_loss, correct = 0, 0
     
     with torch.no_grad():
-        for batch in test_dataloader:
-            input_batch, target_batch = batch[0][:, :-1], batch[0][:, -1]
-            input_batch = input_batch.to(device)
-            target_batch = target_batch.to(device)
-
-            output = model(input_batch)
-            loss = criterion(output.argmax(1), target_batch)
-            correct += (output.argmax(1) == target_batch).type(torch.float).sum().item()
+        test()
 
     test_loss /= num_batches
     correct /= size
