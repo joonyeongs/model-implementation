@@ -1,8 +1,5 @@
 # Description: Neural Network Language Model in PyTorch
-# conda install -c anaconda chardet
-# conda install -c conda-forge portalocker
-# conda install -c pytorch torchtext
-# conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia
+
 
 import os
 import torch
@@ -22,6 +19,10 @@ def create_vocab_from_text_data() -> tuple:
     vocab_size = len(vocab)
 
     return vocab, vocab_size, tokenizer
+
+def create_one_hot_vectors(batch: Tensor) -> Tensor:
+    one_hot_batch = torch.zeros(batch.shape[0], vocab_size).scatter_(1, batch.unsqueeze(1), 1)
+    return one_hot_batch
     
 
 def tokenize_and_split(raw_text_iter: dataset.IterableDataset, length_of_sequence: int) -> Tensor:
@@ -53,6 +54,7 @@ def split_batch_into_input_and_target(batch: list) -> tuple:
     return input_batch, target_batch
 
 def train():
+    train_loss = 0
     for batch in train_dataloader:
         input_batch, target_batch = split_batch_into_input_and_target(batch)
 
@@ -61,9 +63,14 @@ def train():
         train_loss = criterion(output, target_batch)
         train_loss.backward()
         optimizer.step()
-
+    
+    return train_loss
 
 def test():
+    size = len(test_dataloader.dataset)
+    num_batches = len(test_dataloader)
+    test_loss, correct = 0, 0
+
     for batch in test_dataloader:
         input_batch, target_batch = split_batch_into_input_and_target(batch)
 
@@ -71,6 +78,11 @@ def test():
         loss = criterion(output, target_batch)
         test_loss += loss.item()
         correct += (output.argmax(1) == target_batch).type(torch.float).sum().item()
+
+    test_loss /= num_batches
+    correct /= size
+
+    return test_loss, correct
 
 class TextRNN(nn.Module):
     def __init__(self):
@@ -101,7 +113,7 @@ if __name__ == "__main__":
     train_iter, test_iter = WikiText2(split='train'), WikiText2(split='test')
     train_data = tokenize_and_split(train_iter, length_of_sequence)
     test_data = tokenize_and_split(test_iter, length_of_sequence)
-    train_data, test_data = train_data[:100, :], test_data[:100, :]
+    train_data, test_data = train_data[:1000, :], test_data[:1000, :]
     train_dataloader = create_dataloader_from_text_data(train_data, batch_size)
     test_dataloader = create_dataloader_from_text_data(test_data, batch_size)
    
@@ -111,13 +123,11 @@ if __name__ == "__main__":
     model = TextRNN().to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    train()
-    '''
-    for epoch in range(1000):
-        train_loss = 0
-        train()
+    
+    for epoch in range(100):
+        train_loss = train()
 
-        if (epoch + 1) % 100 == 0:
+        if (epoch + 1) % 10 == 0:
             print('Epoch:', '%04d' % (epoch + 1), 'cost =', '{:.6f}'.format(train_loss))
 
     # Test
@@ -126,12 +136,10 @@ if __name__ == "__main__":
     test_loss, correct = 0, 0
     
     with torch.no_grad():
-        test()
+        test_loss, accuracy = test()
 
-    test_loss /= num_batches
-    correct /= size
     print(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n")
-    '''
+    
 
         
     
