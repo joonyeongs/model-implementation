@@ -1,4 +1,12 @@
 # pip freeze > requirements.txt
+# conda install -c anaconda chardet
+# conda install -c conda-forge portalocker
+# conda install -c pytorch torchtext
+# conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia
+# pip install spacy
+# python -m spacy download en_core_web_sm
+# python -m spacy download de_core_news_sm
+
 Brotli @ file:///work/ci_py311/brotli-split_1676830125088/work
 certifi==2023.7.22
 cffi @ file:///work/ci_py311/cffi_1676822533496/work

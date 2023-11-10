@@ -1,4 +1,4 @@
-# Description: Neural Network Language Model in PyTorch
+# Description: RNN Model in PyTorch
 
 
 import os
@@ -43,7 +43,7 @@ def tokenize_and_split(raw_text_iter: dataset.IterableDataset, length_of_sequenc
 
 def create_dataloader_from_text_data(text_data_tensor: Tensor, batch_size: int) -> DataLoader:
     dataset = TensorDataset(text_data_tensor)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
     return dataloader
 
@@ -118,7 +118,7 @@ if __name__ == "__main__":
     test_dataloader = create_dataloader_from_text_data(test_data, batch_size)
    
 
-    
+
     # Training
     model = TextRNN().to(device)
     criterion = nn.CrossEntropyLoss()
@@ -131,12 +131,9 @@ if __name__ == "__main__":
             print('Epoch:', '%04d' % (epoch + 1), 'cost =', '{:.6f}'.format(train_loss))
 
     # Test
-    size = len(test_dataloader.dataset)
-    num_batches = len(test_dataloader)
-    test_loss, correct = 0, 0
     
     with torch.no_grad():
-        test_loss, accuracy = test()
+        test_loss, correct = test()
 
     print(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n")
     
