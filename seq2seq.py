@@ -17,6 +17,8 @@ def create_vocab_from_text_data() -> tuple:
     sentences = {src_language: [], tgt_language: []}
     data_for_dict = Multi30k(split="train", language_pair=language_pair) 
     for src_sentence, tgt_sentence in data_for_dict:
+        if len(src_sentence) > max_length or len(tgt_sentence) > max_length:
+            continue
         sentences[src_language].append(src_sentence)
         sentences[tgt_language].append(tgt_sentence)
 
@@ -56,6 +58,8 @@ def transform_text_data_to_tensor(text_data: Tensor, language: str) -> Tensor:
 def collate_fn(batch: list) -> tuple(list, list):
     src_batch, tgt_batch = [], []
     for src_sample, tgt_sample in batch:
+        if len(src_sample) > max_length or len(tgt_sample) > max_length:
+            continue
         src_batch.append(transform_text_data_to_tensor(src_sample, src_language))
         tgt_batch.append(transform_text_data_to_tensor(tgt_sample, tgt_language))
 
@@ -80,7 +84,7 @@ def train():
         decoder_optimizer.zero_grad()
 
         context_vector = encoder(src_batch)
-        output = decoder(tgt_batch, context_vector)
+        output = decoder(context_vector, tgt_batch)
 
         output = output.view(-1, vocab_size[tgt_language])
         target = tgt_batch[:, 1:].view(-1)
@@ -134,14 +138,25 @@ class Decoder(nn.Module):
         self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
         self.Wh = nn.Linear(hidden_dim, vocab_size[tgt_language])
 
-    def forward(self, x, hidden):
-        x = self.embedding(x)
-        hidden_states, (_, _) = self.lstm(x, hidden)
-        output = hidden_states.view(-1, input_dim)
-        output = self.Wh(output)
-        prediction = output.view(batch_size, -1, vocab_size[tgt_language])
+    def forward(self, context_vector, tgt_batch=None):
+        decoder_input = torch.empty(batch_size, 1, dtype=torch.long).fill_(sos_idx)
+        decoder_outputs = torch.zeros(batch_size, max_length, vocab_size[tgt_language]).to(input.device)
+        hidden = context_vector
+        cell = torch.zeros_like(hidden)
 
-        return prediction
+        for t in range(max_length):
+            decoder_input = self.embedding(decoder_input)
+            decoder_output, (hidden, cell) = self.lstm(decoder_input, (hidden, cell))
+            decoder_output = self.Wh(decoder_output.view(-1, hidden_dim))
+
+            decoder_outputs[t] = decoder_output
+
+            if tgt_batch is not None:
+                decoder_input = tgt_batch[:, t].unsqueeze(1)
+            else:
+                decoder_input = decoder_output.argmax(dim=1).unsqueeze(1)
+
+        return decoder_outputs
 
 
 if __name__ == "__main__":
@@ -150,6 +165,7 @@ if __name__ == "__main__":
     hidden_dim = 100
     num_layers = 1
     batch_size = 64
+    max_length = 50
     src_language = "en"
     tgt_language = "de"
     language_pair = (src_language, tgt_language)

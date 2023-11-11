@@ -43,7 +43,7 @@ def tokenize_and_split(raw_text_iter: dataset.IterableDataset, length_of_sequenc
 
 def create_dataloader_from_text_data(text_data_tensor: Tensor, batch_size: int) -> DataLoader:
     dataset = TensorDataset(text_data_tensor)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
     return dataloader
 
