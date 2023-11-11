@@ -25,11 +25,11 @@ def create_vocab_from_text_data() -> tuple:
     tokenizer[tgt_language] = get_tokenizer('spacy', language='de_core_news_sm')
 
     vocab = {}
-    vocab_size = []
+    vocab_size = {}
     for lang in language_pair:
         vocab[lang] = build_vocab_from_iterator(map(tokenizer[lang], sentences[lang]), specials=special_symbols)
         vocab[lang].set_default_index(vocab[lang]['<unk>'])
-        vocab_size.append(len(vocab[lang]))
+        vocab_size[lang] = len(vocab[lang])
 
     return vocab, vocab_size, tokenizer
     
@@ -39,8 +39,7 @@ def tokenize_text_data(raw_text_iter: str, language: str) -> list:
     return tokens
 
 def map_token_to_index(tokens: list, language: str) -> list:
-    if language == tgt_language:
-        tokens = ['<sos>'] + tokens + ['<eos>']
+    tokens = ['<sos>'] + tokens + ['<eos>']
 
     indices = [vocab[language][token] for token in tokens]
 
@@ -54,7 +53,7 @@ def transform_text_data_to_tensor(text_data: Tensor, language: str) -> Tensor:
 
     return tensor
 
-def collate_fn(batch):
+def collate_fn(batch: list) -> tuple(list, list):
     src_batch, tgt_batch = [], []
     for src_sample, tgt_sample in batch:
         src_batch.append(transform_text_data_to_tensor(src_sample, src_language))
@@ -68,21 +67,34 @@ def collate_fn(batch):
 def create_padding_mask(src, tgt):
     src_padding_mask = (src != pad_idx)
     tgt_padding_mask = (tgt != pad_idx)
+
     return src_padding_mask, tgt_padding_mask   
 
 def train():
-    train_loss = 0
+    total_loss = 0
     for batch in train_dataloader:
         src_batch, tgt_batch = batch
         src_padding_mask, tgt_padding_mask = create_padding_mask(src_batch, tgt_batch)
 
-        optimizer.zero_grad()
-        output = model(src_batch)
-        train_loss = criterion(output, tgt_batch)
+        encoder_optimizer.zero_grad()
+        decoder_optimizer.zero_grad()
+
+        context_vector = encoder(src_batch)
+        output = decoder(tgt_batch, context_vector)
+
+        output = output.view(-1, vocab_size[tgt_language])
+        target = tgt_batch[:, 1:].view(-1)
+        tgt_padding_mask = tgt_padding_mask[:, 1:].view(-1)
+        train_loss = criterion(output, target)
+        train_loss = torch.sum(train_loss * tgt_padding_mask) / torch.sum(tgt_padding_mask)
         train_loss.backward()
-        optimizer.step()
+
+        encoder_optimizer.step()
+        decoder_optimizer.step()
+
+        total_loss += train_loss.item()
     
-    return train_loss
+    return total_loss / len(train_dataloader)
 
 def test():
     size = len(test_dataloader.dataset)
@@ -102,23 +114,41 @@ def test():
 
     return test_loss, correct
 
-class Seq2Seq(nn.Module):
+class Encoder(nn.Module):
     def __init__(self):
-        super(Seq2Seq, self).__init__()
-        self.embedding = nn.Embedding(vocab_size, input_dim)
+        super(Encoder, self).__init__()
+        self.embedding = nn.Embedding(vocab_size[src_language], input_dim)
+        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
 
     def forward(self, x):
         x = self.embedding(x)
+        _, (hidden, _) = self.lstm(x)
+        context_vector = hidden
 
-        return y
-        
+        return context_vector
+    
+class Decoder(nn.Module):
+    def __init__(self):
+        super(Decoder, self).__init__()
+        self.embedding = nn.Embedding(vocab_size[tgt_language], input_dim)
+        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
+        self.Wh = nn.Linear(hidden_dim, vocab_size[tgt_language])
+
+    def forward(self, x, hidden):
+        x = self.embedding(x)
+        hidden_states, (_, _) = self.lstm(x, hidden)
+        output = hidden_states.view(-1, input_dim)
+        output = self.Wh(output)
+        prediction = output.view(batch_size, -1, vocab_size[tgt_language])
+
+        return prediction
+
 
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     input_dim = 200
     hidden_dim = 100
-    num_layers = 3
-    length_of_sequence = 20
+    num_layers = 1
     batch_size = 64
     src_language = "en"
     tgt_language = "de"
@@ -130,26 +160,21 @@ if __name__ == "__main__":
     
     train_data, test_data = Multi30k(split=('train', 'test'), language_pair=language_pair)
     train_dataloader = DataLoader(train_data, batch_size=batch_size, collate_fn=collate_fn)
-    test_dataloader = DataLoader(test_data, batch_size)
+    test_dataloader = DataLoader(test_data, batch_size, collate_fn=collate_fn)
 
-    for batch in train_dataloader:
-        src_batch, tgt_batch = batch
-        sentence = src_batch[3]
-        print(sentence)
     
-        indices = [vocab[src_language].get_itos()[idx] for idx in sentence]
-        print(indices)
-        break
-'''
+
     # Training
-    model = Seq2Seq().to(device)
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    encoder = Encoder().to(device)
+    decoder = Decoder().to(device)
+    criterion = nn.CrossEntropyLoss(reduction='none')
+    encoder_optimizer = torch.optim.Adam(encoder.parameters(), lr=0.001)
+    decoder_optimizer = torch.optim.Adam(decoder.parameters(), lr=0.001)
     
-    for epoch in range(100):
+    for epoch in range(1000):
         train_loss = train()
 
-        if (epoch + 1) % 10 == 0:
+        if (epoch + 1) % 100 == 0:
             print('Epoch:', '%04d' % (epoch + 1), 'cost =', '{:.6f}'.format(train_loss))
 
     # Test
@@ -157,7 +182,7 @@ if __name__ == "__main__":
     with torch.no_grad():
         test_loss, correct = test()
 
-    print(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n")'''
+    print(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n")
     
 
         
