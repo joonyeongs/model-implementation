@@ -104,7 +104,7 @@ if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     input_dim = 200
     hidden_dim = 100
-    num_layers = 3
+    num_layers = 1
     length_of_sequence = 20
     batch_size = 64
 
@@ -113,7 +113,6 @@ if __name__ == "__main__":
     train_iter, test_iter = WikiText2(split='train'), WikiText2(split='test')
     train_data = tokenize_and_split(train_iter, length_of_sequence)
     test_data = tokenize_and_split(test_iter, length_of_sequence)
-    train_data, test_data = train_data[:1000, :], test_data[:1000, :]
     train_dataloader = create_dataloader_from_text_data(train_data, batch_size)
     test_dataloader = create_dataloader_from_text_data(test_data, batch_size)
    
@@ -124,10 +123,10 @@ if __name__ == "__main__":
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     
-    for epoch in range(100):
+    for epoch in range(1000):
         train_loss = train()
 
-        if (epoch + 1) % 10 == 0:
+        if (epoch + 1) % 100 == 0:
             print('Epoch:', '%04d' % (epoch + 1), 'cost =', '{:.6f}'.format(train_loss))
 
     # Test
