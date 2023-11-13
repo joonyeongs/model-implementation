@@ -10,6 +10,8 @@ from torchtext.data.utils import get_tokenizer
 from torchtext.vocab import build_vocab_from_iterator
 from torch import nn, Tensor
 from torch.utils.data import TensorDataset, DataLoader, dataset
+from datetime import datetime
+
 
 def create_vocab_from_text_data() -> tuple:
     data_for_dict = WikiText2(split='train')    
@@ -42,6 +44,7 @@ def tokenize_and_split(raw_text_iter: dataset.IterableDataset, length_of_sequenc
     return data
 
 def create_dataloader_from_text_data(text_data_tensor: Tensor, batch_size: int) -> DataLoader:
+    text_data_tensor = text_data_tensor.to(device)
     dataset = TensorDataset(text_data_tensor)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
@@ -54,7 +57,7 @@ def split_batch_into_input_and_target(batch: list) -> tuple:
     return input_batch, target_batch
 
 def train():
-    train_loss = 0
+    total_loss = 0
     for batch in train_dataloader:
         input_batch, target_batch = split_batch_into_input_and_target(batch)
 
@@ -63,8 +66,9 @@ def train():
         train_loss = criterion(output, target_batch)
         train_loss.backward()
         optimizer.step()
+        total_loss += train_loss.item()
     
-    return train_loss
+    return total_loss / len(train_dataloader)
 
 def test():
     size = len(test_dataloader.dataset)
@@ -101,12 +105,14 @@ class TextRNN(nn.Module):
         
 
 if __name__ == "__main__":
+    start_time = datetime.now()
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     input_dim = 200
     hidden_dim = 100
     num_layers = 1
     length_of_sequence = 20
-    batch_size = 64
+    batch_size = 512
 
     vocab, vocab_size, tokenizer = create_vocab_from_text_data()
     
@@ -123,10 +129,10 @@ if __name__ == "__main__":
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     
-    for epoch in range(1000):
+    for epoch in range(500):
         train_loss = train()
 
-        if (epoch + 1) % 100 == 0:
+        if (epoch + 1) % 50 == 0:
             print('Epoch:', '%04d' % (epoch + 1), 'cost =', '{:.6f}'.format(train_loss))
 
     # Test
@@ -135,6 +141,10 @@ if __name__ == "__main__":
         test_loss, correct = test()
 
     print(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n")
+
+    end_time = datetime.now()
+    execution_time = end_time - start_time
+    print(f"Execution time: {execution_time}")
     
 
         
