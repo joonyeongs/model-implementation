@@ -155,13 +155,18 @@ def print_translation(src_sequence: Tensor, tgt_sequence: Tensor, output_sequenc
 
     for domain, sequence in sequences.items():
         eos_index = (sequence == eos_idx).nonzero(as_tuple=True)
+        print(eos_index)
         if len(eos_index) > 0:
-            sequence_before_eos_tensor = sequence[:eos_index[0]]
+            first_eos_index = eos_index[0].item()
+            sequence_before_eos_tensor = sequence[:first_eos_index]
         else:
             sequence_before_eos_tensor = sequence
             
-        # Ex) "Source: A man who just came from a swim"
-        print(f"{domain}: {' '.join([vocab[tgt_language].get_itos()[idx] for idx in sequence_before_eos_tensor])}")
+        if domain == 'Source':   
+            # Ex) "Source: A man who just came from a swim"
+            print(f"{domain}: {' '.join([vocab[src_language].get_itos()[idx] for idx in sequence_before_eos_tensor])}")
+        else:
+            print(f"{domain}: {' '.join([vocab[tgt_language].get_itos()[idx] for idx in sequence_before_eos_tensor])}")
 
 
 class Encoder(nn.Module):
@@ -219,8 +224,8 @@ if __name__ == "__main__":
     language_pair = (src_language, tgt_language)
     special_symbols = ['<unk>', '<sos>', '<eos>', '<pad>']
     unk_idx, sos_idx, eos_idx, pad_idx = 0, 1, 2, 3
-    tokenizer = {src_language : get_tokenizer('spacy', language='en_core_web_sm'), 
-                 tgt_language : get_tokenizer('spacy', language='de_core_news_sm')}
+    tokenizer = {src_language : get_tokenizer('spacy', language='de_core_news_sm'),
+                 tgt_language : get_tokenizer('spacy', language='en_core_web_sm')}
 
     # Each is a dictionary which has key: language
     vocab, vocab_size = create_vocab_from_text_data()
@@ -238,10 +243,9 @@ if __name__ == "__main__":
     encoder_optimizer = torch.optim.Adam(encoder.parameters(), lr=learning_rate)
     decoder_optimizer = torch.optim.Adam(decoder.parameters(), lr=learning_rate)
     
-    for epoch in range(500):
+    for epoch in range(100):
         train_loss = train()
-
-        if (epoch + 1) % 50 == 0:
+        if (epoch + 1) % 10 == 0:
             print('Epoch:', '%04d' % (epoch + 1), 'cost =', '{:.6f}'.format(train_loss))
 
     # Test
