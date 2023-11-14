@@ -153,7 +153,7 @@ def print_translation(src_sequence: Tensor, tgt_sequence: Tensor, output_sequenc
     output_sequence = output_sequence.argmax(dim=1)
     sequences = {'Source': src_sequence, 'Target': tgt_sequence, 'Output': output_sequence}
 
-    for domain, sequence in sequences:
+    for domain, sequence in sequences.items():
         eos_index = (sequence == eos_idx).nonzero(as_tuple=True)
         if len(eos_index) > 0:
             sequence_before_eos_tensor = sequence[:eos_index[0]]
