@@ -14,12 +14,11 @@ from datetime import datetime
 
 def create_vocab_from_text_data() -> tuple:
     data_for_dict = WikiText2(split='train')    
-    tokenizer = get_tokenizer('basic_english')
-    vocab = build_vocab_from_iterator(map(tokenizer, data_for_dict), specials=['<unk>'], min_freq=5)
+    vocab = build_vocab_from_iterator(map(tokenizer, data_for_dict), specials=['<unk>'], min_freq=3)
     vocab.set_default_index(vocab['<unk>'])
     vocab_size = len(vocab)
 
-    return vocab, vocab_size, tokenizer
+    return vocab, vocab_size
     
 
 def tokenize_and_split(raw_text_iter: dataset.IterableDataset, length_of_sequence: int) -> Tensor:
@@ -115,8 +114,9 @@ if __name__ == "__main__":
     length_of_sequence = 10
     n_hidden = 60
     batch_size = 64
+    tokenizer = get_tokenizer('basic_english')
 
-    vocab, vocab_size, tokenizer = create_vocab_from_text_data()
+    vocab, vocab_size = create_vocab_from_text_data()
     train_iter, test_iter = WikiText2(split='train'), WikiText2(split='test')
     train_data = tokenize_and_split(train_iter, length_of_sequence)
     test_data = tokenize_and_split(test_iter, length_of_sequence)
@@ -129,10 +129,10 @@ if __name__ == "__main__":
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-    for epoch in range(1000):
+    for epoch in range(100):
         train_loss = train()
 
-        if (epoch + 1) % 100 == 0:
+        if (epoch + 1) % 10 == 0:
             print('Epoch:', '%04d' % (epoch + 1), 'cost =', '{:.6f}'.format(train_loss))
 
     # Test
