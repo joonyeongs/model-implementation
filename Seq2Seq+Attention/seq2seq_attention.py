@@ -103,7 +103,7 @@ def train():
     for batch in train_dataloader:
         src_batch, tgt_batch = batch
         src_batch, tgt_batch = src_batch.to(device), tgt_batch.to(device)
-        sgt_padding_mask, tgt_padding_mask = create_padding_mask(src_batch, tgt_batch)
+        src_padding_mask, tgt_padding_mask = create_padding_mask(src_batch, tgt_batch)
 
         encoder_optimizer.zero_grad()
         decoder_optimizer.zero_grad()
@@ -132,7 +132,7 @@ def test():
     for batch in test_dataloader:
         src_batch, tgt_batch = batch
         src_batch, tgt_batch = src_batch.to(device), tgt_batch.to(device)
-        sgt_padding_mask, tgt_padding_mask = create_padding_mask(src_batch, tgt_batch)
+        src_padding_mask, tgt_padding_mask = create_padding_mask(src_batch, tgt_batch)
 
         enc_hidden_states = encoder(src_batch)                    # hidden_states: [batch_size, max_length, hidden_dim]
         output = decoder(src_padding_mask, enc_hidden_states, tgt_batch)
