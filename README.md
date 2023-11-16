@@ -1,2 +1,2 @@
-# model-implementation
-Implement basic language models for practice
+# Model implementation using Pytorch
+Implement language models for practice
