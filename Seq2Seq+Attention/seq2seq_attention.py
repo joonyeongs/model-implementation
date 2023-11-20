@@ -108,8 +108,8 @@ def train():
         encoder_optimizer.zero_grad()
         decoder_optimizer.zero_grad()
 
-        enc_hidden_states = encoder(src_batch)                    # hidden_states: [batch_size, max_length, hidden_dim]
-        output = decoder(src_padding_mask, enc_hidden_states, tgt_batch)
+        enc_hidden_states, enc_last_hidden_state = encoder(src_batch)                    # hidden_states: [batch_size, max_length, hidden_dim]
+        output = decoder(src_padding_mask, enc_hidden_states, enc_last_hidden_state, tgt_batch)
 
         output = output[:, :-1].reshape(-1, vocab_size[tgt_language])   #[batch_size * (max_length - 1), vocab_size]
         target = tgt_batch[:, 1:].reshape(-1)                           #[batch_size * (max_length - 1)]
@@ -134,8 +134,8 @@ def test():
         src_batch, tgt_batch = src_batch.to(device), tgt_batch.to(device)
         src_padding_mask, tgt_padding_mask = create_padding_mask(src_batch, tgt_batch)
 
-        enc_hidden_states = encoder(src_batch)                    # hidden_states: [batch_size, max_length, hidden_dim]
-        output = decoder(src_padding_mask, enc_hidden_states, tgt_batch)
+        enc_hidden_states, enc_last_hidden_state = encoder(src_batch)                    # hidden_states: [batch_size, max_length, hidden_dim]
+        output = decoder(src_padding_mask, enc_hidden_states, enc_last_hidden_state, tgt_batch)
 
         random_integer = random.randint(0, batch_size - 1)
         print_translation(src_batch[random_integer], tgt_batch[random_integer], output[random_integer])
@@ -181,28 +181,30 @@ class Encoder(nn.Module):
 
     def forward(self, x):
         x = self.embedding(x)
-        hidden_states, (_, _) = self.lstm(x)   # hidden_states: [batch_size, max_length, hidden_dim]
+        hidden_states, (last_hidden_state, _) = self.lstm(x)   # hidden_states: [batch_size, max_length, hidden_dim]
 
-        return hidden_states
+        return hidden_states, last_hidden_state                 # last_hidden_state: [num_layers, batch_size, hidden_dim]
     
 class Decoder(nn.Module):
     def __init__(self):
         super(Decoder, self).__init__()
         self.embedding = nn.Embedding(vocab_size[tgt_language], input_dim)
         self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
+        self.attention = Attention()
         self.Wc = nn.Linear(hidden_dim * 2, hidden_dim)
         self.Wh = nn.Linear(hidden_dim, vocab_size[tgt_language])
         self.tanh = nn.Tanh()
 
-    def forward(self, src_padding_mask, enc_hidden_states, tgt_batch=None):
+    def forward(self, src_padding_mask, enc_hidden_states, enc_last_hidden_state, tgt_batch=None):
         dec_input = torch.empty(batch_size, 1, dtype=torch.long).fill_(sos_idx).to(device)
         dec_outputs = torch.zeros(max_length, batch_size, vocab_size[tgt_language]).to(device)
-        cell = torch.zeros(num_layers, batch_size, hidden_dim).to(device)   # cell: [num_layers, batch_size, hidden_dim]
+        hidden = enc_last_hidden_state
+        cell = torch.zeros_like(hidden)
 
         for t in range(max_length):
             dec_input = self.embedding(dec_input)
             dec_output, (hidden, cell) = self.lstm(dec_input, (hidden, cell)) # decoder_output: [batch_size, 1, hidden_dim]
-            context_vector = Attention(dec_output, enc_hidden_states, enc_hidden_states, src_padding_mask)
+            context_vector = self.attention(dec_output, enc_hidden_states, enc_hidden_states, src_padding_mask)
             concatenated_vector = torch.cat((context_vector, dec_output), dim=2)  # concatenated_vector: [batch_size, 1, hidden_dim * 2]
             dec_output = self.tanh(self.Wc(concatenated_vector.squeeze(1)))
             dec_output = self.Wh(dec_output)
@@ -238,9 +240,8 @@ class Attention(nn.Module):
 
         sum_result = query + key           # sum_result: [batch_size, max_length, hidden_dim]
         sum_result = sum_result.reshape(-1, hidden_dim)
-
-        attention_score = self.va(torch.tanh(sum_result))       # attention_score: [batch_size, max_length, 1]
-        attention_score = attention_score.squeeze(2)            # attention_score: [batch_size, max_length]
+        attention_score = self.va(torch.tanh(sum_result))       # attention_score: [batch_size * max_length, 1]
+        attention_score = attention_score.reshape(batch_size, max_length)            
         attention_score = attention_score.masked_fill(mask == 0, -1e10)
         attention_distribution = nn.Softmax(dim=1)(attention_score)  
         attention_distribution = attention_distribution.unsqueeze(1)
@@ -281,9 +282,10 @@ if __name__ == "__main__":
     
     for epoch in range(100):
         train_loss = train()
+        
         if (epoch + 1) % 10 == 0:
             print('Epoch:', '%04d' % (epoch + 1), 'cost =', '{:.6f}'.format(train_loss))
-
+    
     # Test
     
     with torch.no_grad():
