@@ -97,59 +97,50 @@ def create_padding_mask(src_batch: Tensor, tgt_batch: Tensor) -> tuple:
     return src_padding_mask, tgt_padding_mask   
 
 
+def process_batch(batch, calculate_gradients=True):
+    src_batch, tgt_batch = batch
+    src_batch, tgt_batch = src_batch.to(device), tgt_batch.to(device)
+    src_padding_mask, tgt_padding_mask = create_padding_mask(src_batch, tgt_batch)
+
+    if calculate_gradients:
+        encoder_optimizer.zero_grad()
+        decoder_optimizer.zero_grad()
+
+    enc_hidden_states, enc_last_hidden_state = encoder(src_batch)
+    output = decoder(src_padding_mask, enc_hidden_states, enc_last_hidden_state, tgt_batch)
+
+    output = output[:, :-1].reshape(-1, vocab_size[tgt_language])
+    target = tgt_batch[:, 1:].reshape(-1)
+    tgt_padding_mask = tgt_padding_mask[:, 1:].reshape(-1)
+    loss = criterion(output, target)
+    loss = torch.sum(loss * tgt_padding_mask) / torch.sum(tgt_padding_mask)
+
+    if calculate_gradients:
+        loss.backward()
+        encoder_optimizer.step()
+        decoder_optimizer.step()
+
+    return loss.item()
+
 def train():
     total_loss = 0
     num_batches = len(train_dataloader)
     for batch in train_dataloader:
-        src_batch, tgt_batch = batch
-        src_batch, tgt_batch = src_batch.to(device), tgt_batch.to(device)
-        src_padding_mask, tgt_padding_mask = create_padding_mask(src_batch, tgt_batch)
+        loss = process_batch(batch, calculate_gradients=True)
+        total_loss += loss
 
-        encoder_optimizer.zero_grad()
-        decoder_optimizer.zero_grad()
-
-        enc_hidden_states, enc_last_hidden_state = encoder(src_batch)                    
-        output = decoder(src_padding_mask, enc_hidden_states, enc_last_hidden_state, tgt_batch)
-
-        output = output[:, :-1].reshape(-1, vocab_size[tgt_language])   # [batch_size * (max_length - 1), vocab_size]
-        target = tgt_batch[:, 1:].reshape(-1)                           # [batch_size * (max_length - 1)]
-        tgt_padding_mask = tgt_padding_mask[:, 1:].reshape(-1)          # ignore <sos> token
-        train_loss = criterion(output, target)
-        train_loss = torch.sum(train_loss * tgt_padding_mask) / torch.sum(tgt_padding_mask)
-        train_loss.backward()
-
-        encoder_optimizer.step()
-        decoder_optimizer.step()
-
-        total_loss += train_loss.item()
-    
     return total_loss / num_batches
 
 def test():
-    num_batches = len(test_dataloader)
     total_loss = 0
+    num_batches = len(test_dataloader)
+    with torch.no_grad():
+        for batch in test_dataloader:
+            loss = process_batch(batch, calculate_gradients=False)
+            total_loss += loss
 
-    for batch in test_dataloader:
-        src_batch, tgt_batch = batch
-        src_batch, tgt_batch = src_batch.to(device), tgt_batch.to(device)
-        src_padding_mask, tgt_padding_mask = create_padding_mask(src_batch, tgt_batch)
+    return total_loss / num_batches
 
-        enc_hidden_states, enc_last_hidden_state = encoder(src_batch)                    
-        output = decoder(src_padding_mask, enc_hidden_states, enc_last_hidden_state, tgt_batch)
-
-        random_integer = random.randint(0, batch_size - 1)
-        print_translation(src_batch[random_integer], tgt_batch[random_integer], output[random_integer])
-
-        output = output[:, :-1].reshape(-1, vocab_size[tgt_language])   #[batch_size * (max_length - 1), vocab_size]
-        target = tgt_batch[:, 1:].reshape(-1)                           #[batch_size * (max_length - 1)]
-        tgt_padding_mask = tgt_padding_mask[:, 1:].reshape(-1)          #[batch_size * (max_length - 1)]
-        test_loss = criterion(output, target)
-        test_loss = torch.sum(test_loss * tgt_padding_mask) / torch.sum(tgt_padding_mask)
-        total_loss += test_loss.item()
-
-    total_loss /= num_batches
-
-    return total_loss
 
 def print_translation(src_sequence: Tensor, tgt_sequence: Tensor, output_sequence: Tensor):
     output_sequence = output_sequence.argmax(dim=1)
@@ -288,9 +279,7 @@ if __name__ == "__main__":
             print('Epoch:', '%04d' % (epoch + 1), 'cost =', '{:.6f}'.format(train_loss))
     
     # Test
-    
-    with torch.no_grad():
-        test_loss = test()
+    test_loss = test()
 
     print(f"Test Error: \n Avg loss: {test_loss:>8f} \n")
     
