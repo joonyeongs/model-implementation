@@ -1,4 +1,4 @@
-# Description: Seq2seq Model in PyTorch
+# Description: Seq2seq+Attention Model in PyTorch
 
 
 import os
@@ -108,12 +108,12 @@ def train():
         encoder_optimizer.zero_grad()
         decoder_optimizer.zero_grad()
 
-        enc_hidden_states, enc_last_hidden_state = encoder(src_batch)                    # hidden_states: [batch_size, max_length, hidden_dim]
+        enc_hidden_states, enc_last_hidden_state = encoder(src_batch)                    
         output = decoder(src_padding_mask, enc_hidden_states, enc_last_hidden_state, tgt_batch)
 
-        output = output[:, :-1].reshape(-1, vocab_size[tgt_language])   #[batch_size * (max_length - 1), vocab_size]
-        target = tgt_batch[:, 1:].reshape(-1)                           #[batch_size * (max_length - 1)]
-        tgt_padding_mask = tgt_padding_mask[:, 1:].reshape(-1)          #[batch_size * (max_length - 1)]
+        output = output[:, :-1].reshape(-1, vocab_size[tgt_language])   # [batch_size * (max_length - 1), vocab_size]
+        target = tgt_batch[:, 1:].reshape(-1)                           # [batch_size * (max_length - 1)]
+        tgt_padding_mask = tgt_padding_mask[:, 1:].reshape(-1)          # ignore <sos> token
         train_loss = criterion(output, target)
         train_loss = torch.sum(train_loss * tgt_padding_mask) / torch.sum(tgt_padding_mask)
         train_loss.backward()
@@ -134,7 +134,7 @@ def test():
         src_batch, tgt_batch = src_batch.to(device), tgt_batch.to(device)
         src_padding_mask, tgt_padding_mask = create_padding_mask(src_batch, tgt_batch)
 
-        enc_hidden_states, enc_last_hidden_state = encoder(src_batch)                    # hidden_states: [batch_size, max_length, hidden_dim]
+        enc_hidden_states, enc_last_hidden_state = encoder(src_batch)                    
         output = decoder(src_padding_mask, enc_hidden_states, enc_last_hidden_state, tgt_batch)
 
         random_integer = random.randint(0, batch_size - 1)
@@ -228,24 +228,25 @@ class Attention(nn.Module):
 
     def forward(self, query, key, value, mask):
         """
-        a(s, h) = va * tanh(Wa * s + Ua * h)   s: dec_hidden_state, h: hidden_states
+        a(s, h) = va * tanh(Wa * s + Ua * h)   s: decoder hidden state, h: encoder hidden states
+
+        decoder hidden state : [batch_size, 1, hidden_dim]
+        encoder hidden states : [batch_size, max_length, hidden_dim]
+        query : decoder hidden state
+        key, value : encoder hidden states
         """
-        query = query.squeeze(1)          # query: [batch_size, hidden_dim]
-        query = self.Wa(query)    
-        query = query.unsqueeze(1)        # query: [batch_size, 1, hidden_dim]
+        query = self.Wa(query.squeeze(1)).unsqueeze(1)
 
-        key = key.reshape(-1, hidden_dim)   # key: [batch_size * max_length, hidden_dim]
-        key = self.Ua(key)          
-        key = key.reshape(batch_size, max_length, hidden_dim)
+        key = self.Ua(key.view(-1, hidden_dim)).reshape(batch_size, max_length, hidden_dim)
 
-        sum_result = query + key           # sum_result: [batch_size, max_length, hidden_dim]
-        sum_result = sum_result.reshape(-1, hidden_dim)
-        attention_score = self.va(torch.tanh(sum_result))       # attention_score: [batch_size * max_length, 1]
-        attention_score = attention_score.reshape(batch_size, max_length)            
+        sum_result = torch.tanh(query + key)
+        attention_score = self.va(sum_result.view(-1, hidden_dim)).reshape(batch_size, max_length)
+
         attention_score = attention_score.masked_fill(mask == 0, -1e10)
-        attention_distribution = nn.Softmax(dim=1)(attention_score)  
-        attention_distribution = attention_distribution.unsqueeze(1)
-        context_vector = torch.bmm(attention_distribution, value)   # context_vector: [batch_size, 1, hidden_dim]
+        attention_distribution = torch.softmax(attention_score, dim=1).unsqueeze(1)
+
+        context_vector = torch.bmm(attention_distribution, value)
+
         return context_vector
 
 if __name__ == "__main__":
