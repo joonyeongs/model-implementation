@@ -163,13 +163,60 @@ def print_translation(src_sequence: Tensor, tgt_sequence: Tensor, output_sequenc
     print("\n")
 
 
-
-class Attention(nn.Module):
+class Embedding(nn.Module):
     def __init__(self):
-        super(Attention, self).__init__()
+        super(Embedding, self).__init__()
+        pass
+
+    def forward(self, batch):
+        pass
+
+class PositionalEncoding(nn.Module):
+    def __init__(self):
+        super(PositionalEncoding, self).__init__()
+        pass
+
+    def forward(self, embeddings):
+        pass
+
+class ScaledDotProductAttention(nn.Module):
+    def __init__(self):
+        super(ScaledDotProductAttention, self).__init__()
         pass
 
     def forward(self, query, key, value, mask):
+        pass
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self):
+        super(MultiHeadAttention, self).__init__()
+        pass
+
+    def forward(self, attentions):
+        pass
+
+class ResidualConnection(nn.Module):
+    def __init__(self):
+        super(ResidualConnection, self).__init__()
+        pass
+
+    def forward(self, inputs):
+        pass
+
+class LayerNormalization(nn.Module):
+    def __init__(self):
+        super(LayerNormalization, self).__init__()
+        pass
+
+    def forward(self, inputs):
+        pass
+
+class FeedForwardNeuralNetwork(nn.Module):
+    def __init__(self):
+        super(FeedForwardNeuralNetwork, self).__init__()
+        pass
+
+    def forward(self, inputs):
         pass
 
 class Encoder(nn.Module):
@@ -183,6 +230,22 @@ class Encoder(nn.Module):
 class Decoder(nn.Module):
     def __init__(self):
         super(Decoder, self).__init__()
+        pass
+
+    def forward(self):
+        pass
+
+class StackedEncoder(nn.Module):
+    def __init__(self):
+        super(StackedEncoder, self).__init__()
+        pass
+
+    def forward(self):
+        pass
+
+class StackedDecoder(nn.Module):
+    def __init__(self):
+        super(StackedDecoder, self).__init__()
         pass
 
     def forward(self):
