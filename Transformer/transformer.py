@@ -164,20 +164,36 @@ def print_translation(src_sequence: Tensor, tgt_sequence: Tensor, output_sequenc
 
 
 class Embedding(nn.Module):
-    def __init__(self):
+    def __init__(self, vocab_size, embedding_dim, padding_idx):
         super(Embedding, self).__init__()
-        pass
+        self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx)
 
     def forward(self, batch):
-        pass
+        embeddings = self.embedding(batch)
+
+        return embeddings
 
 class PositionalEncoding(nn.Module):
-    def __init__(self):
+    def __init__(self, max_length,embedding_dim):
         super(PositionalEncoding, self).__init__()
-        pass
+        self.positional_encoding = self.create_positional_encoding(max_length, embedding_dim)
 
-    def forward(self, embeddings):
-        pass
+    def get_angles(self, max_length, embedding_dim):
+        position = torch.arange(max_length).unsqueeze(1)
+        div_term = torch.pow(10000, torch.arange(0, embedding_dim, 2).float() / embedding_dim)
+
+        return position / div_term
+
+    def create_positional_encoding(self, max_length, embedding_dim):
+        angles = self.get_angles(max_length, embedding_dim)
+        positional_encoding = torch.zeros(max_length, embedding_dim)
+        positional_encoding[:, 0::2] = torch.sin(angles)
+        positional_encoding[:, 1::2] = torch.cos(angles)
+
+        return positional_encoding
+
+    def forward(self, x):
+        return x + self.positional_encoding[:x.size(1), :].detach()
 
 class ScaledDotProductAttention(nn.Module):
     def __init__(self):
@@ -254,9 +270,8 @@ class StackedDecoder(nn.Module):
 
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    input_dim = 300
-    hidden_dim = 200
-    num_layers = 1
+    model_dim = 512
+    num_layers = 6
     batch_size = 64
     max_length = 20
     learning_rate = 0.001
