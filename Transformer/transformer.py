@@ -225,25 +225,22 @@ class ScaledDotProductAttention(nn.Module):
         return attention_value
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, batch_size, max_length, embedding_dim, num_heads):
+    def __init__(self, embedding_dim, num_heads):
         super(MultiHeadAttention, self,).__init__()
-        self.attention_heads = nn.ModuleList([ScaledDotProductAttention(batch_size, max_length, embedding_dim, embedding_dim / num_heads)
+        self.attention_dim = embedding_dim // num_heads
+        assert self.attention_dim * num_heads == embedding_dim
+
+        self.attention_heads = nn.ModuleList([ScaledDotProductAttention(embedding_dim, self.attention_dim)
                                                for _ in range(num_heads)])
         self.Wo = nn.Linear(embedding_dim, embedding_dim)
-        self.batch_size = batch_size
-        self.max_length = max_length
-        self.embedding_dim = embedding_dim
         self.num_heads = num_heads
 
     def forward(self, query, key, value, mask=None):
         attention_values = []
 
-        for attention_head in self.attention_heads:
-            attention_value = attention_head(query, key, value, mask)
-            attention_values.append(attention_value)
+        attention_values = [attention_head(query, key, value, mask) for attention_head in self.attention_heads]
         concatenated_attention_values = torch.cat(attention_values, dim=-1)
-        output = self.Wo(concatenated_attention_values.reshape(self.batch_size * self.max_length, self.embedding_dim))
-        output = output.reshape(self.batch_size, self.max_length, self.embedding_dim)
+        output = self.Wo(concatenated_attention_values)
 
         return output
         
