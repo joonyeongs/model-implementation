@@ -96,6 +96,12 @@ def create_padding_mask(src_batch: Tensor, tgt_batch: Tensor) -> tuple:
 
     return src_padding_mask, tgt_padding_mask   
 
+def create_attention_mask(tgt_batch: Tensor) -> Tensor:
+    batch_size, tgt_length = tgt_batch.size()
+    attention_mask = torch.tril(torch.ones((tgt_length, tgt_length))).expand(batch_size, tgt_length, tgt_length)
+
+    return attention_mask
+
 
 def process_batch(batch, calculate_gradients=True):
     src_batch, tgt_batch = batch
@@ -174,7 +180,7 @@ class Embedding(nn.Module):
         return embeddings
 
 class PositionalEncoding(nn.Module):
-    def __init__(self, max_length,embedding_dim):
+    def __init__(self, max_length, embedding_dim):
         super(PositionalEncoding, self).__init__()
         self.positional_encoding = self.create_positional_encoding(max_length, embedding_dim)
 
@@ -196,20 +202,58 @@ class PositionalEncoding(nn.Module):
         return x + self.positional_encoding[:x.size(1), :].detach()
 
 class ScaledDotProductAttention(nn.Module):
-    def __init__(self):
+    def __init__(self, batch_size, max_length, embedding_dim, attention_dim):
         super(ScaledDotProductAttention, self).__init__()
-        pass
+        self.batch_size = batch_size
+        self.max_length = max_length
+        self.embedding_dim = embedding_dim
+        self.Wq = nn.Linear(embedding_dim, attention_dim)
+        self.Wk = nn.Linear(embedding_dim, attention_dim)
+        self.Wv = nn.Linear(embedding_dim, attention_dim)
 
-    def forward(self, query, key, value, mask):
-        pass
+    def create_vectors_for_attention(self, query, key, value):
+        query = self.Wq(query.reshape(self.batch_size * self.max_length, self.embedding_dim))
+        key = self.Wk(key.reshape(self.batch_size * self.max_length, self.embedding_dim))
+        value = self.Wv(value.reshape(self.batch_size * self.max_length, self.embedding_dim))
+        query = query.reshape(self.batch_size, self.max_length, self.attention_dim)
+        key = key.reshape(self.batch_size, self.max_length, self.attention_dim)
+        value = value.reshape(self.batch_size, self.max_length, self.attention_dim)
+
+        return query, key, value
+
+    def forward(self, query, key, value, mask=None):
+        query, key, value = self.create_vectors_for_attention(query, key, value)
+        key = key.transpose(1, 2)
+        attention_score = torch.bmm(query, key) / torch.sqrt(torch.tensor(self.embedding_dim).float())
+        attention_score = attention_score.masked_fill(mask == 0, -1e10)
+        attention_distribution = torch.softmax(attention_score, dim=-1)
+        attention_value = torch.bmm(attention_distribution, value)
+
+        return attention_value
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self):
-        super(MultiHeadAttention, self).__init__()
-        pass
+    def __init__(self, batch_size, max_length, embedding_dim, num_heads):
+        super(MultiHeadAttention, self,).__init__()
+        self.attention_heads = nn.ModuleList([ScaledDotProductAttention(batch_size, max_length, embedding_dim, embedding_dim / num_heads)
+                                               for _ in range(num_heads)])
+        self.Wo = nn.Linear(embedding_dim, embedding_dim)
+        self.batch_size = batch_size
+        self.max_length = max_length
+        self.embedding_dim = embedding_dim
+        self.num_heads = num_heads
 
-    def forward(self, attentions):
-        pass
+    def forward(self, query, key, value, mask=None):
+        attention_values = []
+
+        for attention_head in self.attention_heads:
+            attention_value = attention_head(query, key, value, mask)
+            attention_values.append(attention_value)
+        concatenated_attention_values = torch.cat(attention_values, dim=-1)
+        output = self.Wo(concatenated_attention_values.reshape(self.batch_size * self.max_length, self.embedding_dim))
+        output = output.reshape(self.batch_size, self.max_length, self.embedding_dim)
+
+        return output
+        
 
 class ResidualConnection(nn.Module):
     def __init__(self):
