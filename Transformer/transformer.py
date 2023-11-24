@@ -256,18 +256,24 @@ class ResidualConnection(nn.Module):
 class LayerNormalization(nn.Module):
     def __init__(self):
         super(LayerNormalization, self).__init__()
-        pass
+
 
     def forward(self, inputs):
         pass
 
 class FeedForwardNeuralNetwork(nn.Module):
-    def __init__(self):
+    def __init__(self, embedding_dim, feed_forward_dim):
         super(FeedForwardNeuralNetwork, self).__init__()
-        pass
+        self.W1 = nn.Linear(embedding_dim, feed_forward_dim)
+        self.W2 = nn.Linear(feed_forward_dim, embedding_dim)
+        self.relu = nn.ReLU()
 
     def forward(self, inputs):
-        pass
+        outputs = self.W1(inputs)
+        outputs = self.relu(outputs)
+        outputs = self.W2(outputs)
+
+        return outputs
 
 class Encoder(nn.Module):
     def __init__(self):
