@@ -202,29 +202,22 @@ class PositionalEncoding(nn.Module):
         return x + self.positional_encoding[:x.size(1), :].detach()
 
 class ScaledDotProductAttention(nn.Module):
-    def __init__(self, batch_size, max_length, embedding_dim, attention_dim):
+    def __init__(self, embedding_dim, attention_dim):
         super(ScaledDotProductAttention, self).__init__()
-        self.batch_size = batch_size
-        self.max_length = max_length
         self.embedding_dim = embedding_dim
+        self.attention_dim = attention_dim
+        self.scale = torch.sqrt(torch.tensor(attention_dim).float())
         self.Wq = nn.Linear(embedding_dim, attention_dim)
         self.Wk = nn.Linear(embedding_dim, attention_dim)
         self.Wv = nn.Linear(embedding_dim, attention_dim)
 
-    def create_vectors_for_attention(self, query, key, value):
-        query = self.Wq(query.reshape(self.batch_size * self.max_length, self.embedding_dim))
-        key = self.Wk(key.reshape(self.batch_size * self.max_length, self.embedding_dim))
-        value = self.Wv(value.reshape(self.batch_size * self.max_length, self.embedding_dim))
-        query = query.reshape(self.batch_size, self.max_length, self.attention_dim)
-        key = key.reshape(self.batch_size, self.max_length, self.attention_dim)
-        value = value.reshape(self.batch_size, self.max_length, self.attention_dim)
-
-        return query, key, value
-
     def forward(self, query, key, value, mask=None):
-        query, key, value = self.create_vectors_for_attention(query, key, value)
+        query = self.Wq(query)
+        key = self.Wk(key)
+        value = self.Wv(value)
+
         key = key.transpose(1, 2)
-        attention_score = torch.bmm(query, key) / torch.sqrt(torch.tensor(self.embedding_dim).float())
+        attention_score = torch.bmm(query, key) / self.scale
         attention_score = attention_score.masked_fill(mask == 0, -1e10)
         attention_distribution = torch.softmax(attention_score, dim=-1)
         attention_value = torch.bmm(attention_distribution, value)
