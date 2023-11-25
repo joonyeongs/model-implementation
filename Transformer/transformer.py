@@ -1,4 +1,4 @@
-# Description: Seq2seq+Attention Model in PyTorch
+# Description: Transformer Model in PyTorch
 
 
 import os
@@ -102,6 +102,9 @@ def create_attention_mask(tgt_batch: Tensor) -> Tensor:
 
     return attention_mask
 
+def residual_connection(x, sublayer_output):
+    return x + sublayer_output
+
 
 def process_batch(batch, calculate_gradients=True):
     src_batch, tgt_batch = batch
@@ -170,9 +173,9 @@ def print_translation(src_sequence: Tensor, tgt_sequence: Tensor, output_sequenc
 
 
 class Embedding(nn.Module):
-    def __init__(self, vocab_size, embedding_dim, padding_idx):
+    def __init__(self, vocab_size, embedding_dim):
         super(Embedding, self).__init__()
-        self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx)
+        self.embedding = nn.Embedding(vocab_size, embedding_dim)
 
     def forward(self, batch):
         embeddings = self.embedding(batch)
@@ -245,21 +248,14 @@ class MultiHeadAttention(nn.Module):
         return output
         
 
-class ResidualConnection(nn.Module):
-    def __init__(self):
-        super(ResidualConnection, self).__init__()
-        pass
-
-    def forward(self, inputs):
-        pass
-
 class LayerNormalization(nn.Module):
-    def __init__(self):
+    def __init__(self, num_features):
         super(LayerNormalization, self).__init__()
+        self.layer_norm = nn.LayerNorm(num_features)
 
-
-    def forward(self, inputs):
-        pass
+    def forward(self, x):
+        x = self.layer_norm(x)
+        return x
 
 class FeedForwardNeuralNetwork(nn.Module):
     def __init__(self, embedding_dim, feed_forward_dim):
@@ -275,37 +271,85 @@ class FeedForwardNeuralNetwork(nn.Module):
 
         return outputs
 
-class Encoder(nn.Module):
-    def __init__(self):
-        super(Encoder, self).__init__()
-        pass
+class EncoderLayer(nn.Module):
+    def __init__(self, vocab_size, max_length, embedding_dim, feed_forward_dim, num_heads):
+        super(EncoderLayer, self).__init__()
+        self.embedding = Embedding(vocab_size, embedding_dim)
+        self.positional_encoding = PositionalEncoding(max_length, embedding_dim)
+        self.multi_head_attention = MultiHeadAttention(embedding_dim, num_heads)
+        self.feed_forward_neural_network = FeedForwardNeuralNetwork(embedding_dim, feed_forward_dim)
+        self.add = residual_connection()
+        self.norm1 = LayerNormalization(embedding_dim)
+        self.norm2 = LayerNormalization(embedding_dim)
 
-    def forward(self):
-        pass
+    def forward(self, batch):
+        embedding = self.embedding(batch)
+        embedding = self.positional_encoding(embedding)
+
+        layer_1 = self.add(embedding, self.multi_head_attention(embedding, embedding, embedding))
+        normalized_layer_1 = self.norm1(layer_1)
+
+        layer_2 = self.add(normalized_layer_1, self.feed_forward_neural_network(normalized_layer_1))
+        normalized_layer_2 = self.norm2(layer_2)
+        output = normalized_layer_2
+
+        return output
     
-class Decoder(nn.Module):
-    def __init__(self):
-        super(Decoder, self).__init__()
-        pass
+class DecoderLayer(nn.Module):
+    def __init__(self, vocab_size, max_length, embedding_dim, feed_forward_dim, num_heads):
+        super(DecoderLayer, self).__init__()
+        self.embedding = Embedding(vocab_size, embedding_dim)
+        self.positional_encoding = PositionalEncoding(max_length, embedding_dim)
+        self.masked_multi_head_attention = MultiHeadAttention(embedding_dim, num_heads)
+        self.multi_head_attention = MultiHeadAttention(embedding_dim, num_heads)
+        self.feed_forward_neural_network = FeedForwardNeuralNetwork(embedding_dim, feed_forward_dim)
+        self.add = residual_connection()
+        self.norm1 = LayerNormalization(embedding_dim)
+        self.norm2 = LayerNormalization(embedding_dim)
+        self.norm3 = LayerNormalization(embedding_dim)
+        self.dense_layer = nn.Linear(embedding_dim, vocab_size)
 
-    def forward(self):
-        pass
+    def forward(self, batch, encoder_output, mask):
+        embedding = self.embedding(batch)
+        embedding = self.positional_encoding(embedding)
+
+        layer_1 = self.add(embedding, self.masked_multi_head_attention(embedding, embedding, embedding, mask))
+        normalized_layer_1 = self.norm1(layer_1)
+
+        layer_2 = self.add(normalized_layer_1, self.multi_head_attention(normalized_layer_1, encoder_output, encoder_output))
+        normalized_layer_2 = self.norm2(layer_2)
+
+        layer_3 = self.add(normalized_layer_2, self.feed_forward_neural_network(normalized_layer_2))
+        normalized_layer_3 = self.norm3(layer_3)
+        output = self.dense_layer(normalized_layer_3)
+
+        return output
 
 class StackedEncoder(nn.Module):
-    def __init__(self):
+    def __init__(self, vocab_size, max_length, embedding_dim, feed_forward_dim, num_heads, num_layers):
         super(StackedEncoder, self).__init__()
-        pass
+        self.encoder_layers = nn.ModuleList([EncoderLayer(vocab_size, max_length, embedding_dim, feed_forward_dim, num_heads)
+                                             for _ in range(num_layers)])
 
-    def forward(self):
-        pass
+    def forward(self, batch):
+        output = batch
+        for encoder_layer in self.encoder_layers:
+            output = encoder_layer(output)
+
+        return output
 
 class StackedDecoder(nn.Module):
-    def __init__(self):
+    def __init__(self, vocab_size, max_length, embedding_dim, feed_forward_dim, num_heads, num_layers):
         super(StackedDecoder, self).__init__()
-        pass
+        self.decoder_layers = nn.ModuleList([DecoderLayer(vocab_size, max_length, embedding_dim, feed_forward_dim, num_heads)
+                                             for _ in range(num_layers)])
 
-    def forward(self):
-        pass
+    def forward(self, batch, encoder_output, mask):
+        output = batch
+        for decoder_layer in self.decoder_layers:
+            output = decoder_layer(batch, encoder_output, mask)
+
+        return output
  
 
 if __name__ == "__main__":
