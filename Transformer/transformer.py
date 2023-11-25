@@ -98,30 +98,30 @@ def create_padding_mask(src_batch: Tensor, tgt_batch: Tensor) -> tuple:
 
 def create_attention_mask(tgt_batch: Tensor) -> Tensor:
     batch_size, tgt_length = tgt_batch.size()
-    attention_mask = torch.tril(torch.ones((tgt_length, tgt_length))).expand(batch_size, tgt_length, tgt_length)
+    tgt_attention_mask = torch.tril(torch.ones((tgt_length, tgt_length))).expand(batch_size, tgt_length, tgt_length)
+    tgt_attention_mask = tgt_attention_mask.to(device)
 
-    return attention_mask
-
-def residual_connection(x, sublayer_output):
-    return x + sublayer_output
+    return tgt_attention_mask
 
 
 def process_batch(batch, calculate_gradients=True):
     src_batch, tgt_batch = batch
     src_batch, tgt_batch = src_batch.to(device), tgt_batch.to(device)
     src_padding_mask, tgt_padding_mask = create_padding_mask(src_batch, tgt_batch)
+    src_padding_mask = src_padding_mask.unsqueeze(1)
+    tgt_attention_mask = create_attention_mask(tgt_batch)
 
     if calculate_gradients:
         encoder_optimizer.zero_grad()
         decoder_optimizer.zero_grad()
 
-    encoder(src_batch)
-    output = decoder()
+    encoder_output = encoder(src_batch, src_padding_mask)
+    decoder_output = decoder(tgt_batch, encoder_output, src_padding_mask, tgt_attention_mask)
 
-    output = output[:, :-1].reshape(-1, vocab_size[tgt_language])
+    decoder_output = decoder_output[:, :-1].reshape(-1, vocab_size[tgt_language])
     target = tgt_batch[:, 1:].reshape(-1)
     tgt_padding_mask = tgt_padding_mask[:, 1:].reshape(-1)
-    loss = criterion(output, target)
+    loss = criterion(decoder_output, target)
     loss = torch.sum(loss * tgt_padding_mask) / torch.sum(tgt_padding_mask)
 
     if calculate_gradients:
@@ -202,6 +202,7 @@ class PositionalEncoding(nn.Module):
         return positional_encoding
 
     def forward(self, x):
+        self.positional_encoding = self.positional_encoding.to(x.device)
         return x + self.positional_encoding[:x.size(1), :].detach()
 
 class ScaledDotProductAttention(nn.Module):
@@ -272,82 +273,78 @@ class FeedForwardNeuralNetwork(nn.Module):
         return outputs
 
 class EncoderLayer(nn.Module):
-    def __init__(self, vocab_size, max_length, embedding_dim, feed_forward_dim, num_heads):
+    def __init__(self, embedding_dim, feed_forward_dim, num_heads):
         super(EncoderLayer, self).__init__()
-        self.embedding = Embedding(vocab_size, embedding_dim)
-        self.positional_encoding = PositionalEncoding(max_length, embedding_dim)
         self.multi_head_attention = MultiHeadAttention(embedding_dim, num_heads)
         self.feed_forward_neural_network = FeedForwardNeuralNetwork(embedding_dim, feed_forward_dim)
-        self.add = residual_connection()
         self.norm1 = LayerNormalization(embedding_dim)
         self.norm2 = LayerNormalization(embedding_dim)
 
-    def forward(self, batch):
-        embedding = self.embedding(batch)
-        embedding = self.positional_encoding(embedding)
-
-        layer_1 = self.add(embedding, self.multi_head_attention(embedding, embedding, embedding))
+    def forward(self, batch, padding_mask):
+        layer_1 = batch + self.multi_head_attention(batch, batch, batch, padding_mask)
         normalized_layer_1 = self.norm1(layer_1)
 
-        layer_2 = self.add(normalized_layer_1, self.feed_forward_neural_network(normalized_layer_1))
-        normalized_layer_2 = self.norm2(layer_2)
-        output = normalized_layer_2
+        layer_2 = normalized_layer_1 + self.feed_forward_neural_network(normalized_layer_1)
+        output = self.norm2(layer_2)
 
         return output
     
 class DecoderLayer(nn.Module):
-    def __init__(self, vocab_size, max_length, embedding_dim, feed_forward_dim, num_heads):
+    def __init__(self, embedding_dim, feed_forward_dim, num_heads):
         super(DecoderLayer, self).__init__()
-        self.embedding = Embedding(vocab_size, embedding_dim)
-        self.positional_encoding = PositionalEncoding(max_length, embedding_dim)
         self.masked_multi_head_attention = MultiHeadAttention(embedding_dim, num_heads)
         self.multi_head_attention = MultiHeadAttention(embedding_dim, num_heads)
         self.feed_forward_neural_network = FeedForwardNeuralNetwork(embedding_dim, feed_forward_dim)
-        self.add = residual_connection()
         self.norm1 = LayerNormalization(embedding_dim)
         self.norm2 = LayerNormalization(embedding_dim)
         self.norm3 = LayerNormalization(embedding_dim)
-        self.dense_layer = nn.Linear(embedding_dim, vocab_size)
 
-    def forward(self, batch, encoder_output, mask):
-        embedding = self.embedding(batch)
-        embedding = self.positional_encoding(embedding)
-
-        layer_1 = self.add(embedding, self.masked_multi_head_attention(embedding, embedding, embedding, mask))
+    def forward(self, batch, encoder_output, padding_mask, attention_mask):
+        layer_1 = batch + self.masked_multi_head_attention(batch, batch, batch, attention_mask)
         normalized_layer_1 = self.norm1(layer_1)
 
-        layer_2 = self.add(normalized_layer_1, self.multi_head_attention(normalized_layer_1, encoder_output, encoder_output))
+        layer_2 = normalized_layer_1 + self.multi_head_attention(normalized_layer_1, encoder_output, encoder_output, padding_mask)
         normalized_layer_2 = self.norm2(layer_2)
 
-        layer_3 = self.add(normalized_layer_2, self.feed_forward_neural_network(normalized_layer_2))
-        normalized_layer_3 = self.norm3(layer_3)
-        output = self.dense_layer(normalized_layer_3)
+        layer_3 = normalized_layer_2 + self.feed_forward_neural_network(normalized_layer_2)
+        output = self.norm3(layer_3)
 
         return output
 
 class StackedEncoder(nn.Module):
     def __init__(self, vocab_size, max_length, embedding_dim, feed_forward_dim, num_heads, num_layers):
         super(StackedEncoder, self).__init__()
-        self.encoder_layers = nn.ModuleList([EncoderLayer(vocab_size, max_length, embedding_dim, feed_forward_dim, num_heads)
+        self.embedding = Embedding(vocab_size, embedding_dim)
+        self.positional_encoding = PositionalEncoding(max_length, embedding_dim)
+        self.encoder_layers = nn.ModuleList([EncoderLayer(embedding_dim, feed_forward_dim, num_heads)
                                              for _ in range(num_layers)])
 
-    def forward(self, batch):
-        output = batch
+    def forward(self, batch, padding_mask):
+        embedding = self.embedding(batch)
+        output = self.positional_encoding(embedding)
+
         for encoder_layer in self.encoder_layers:
-            output = encoder_layer(output)
+            output = encoder_layer(output, padding_mask)
 
         return output
 
 class StackedDecoder(nn.Module):
     def __init__(self, vocab_size, max_length, embedding_dim, feed_forward_dim, num_heads, num_layers):
         super(StackedDecoder, self).__init__()
-        self.decoder_layers = nn.ModuleList([DecoderLayer(vocab_size, max_length, embedding_dim, feed_forward_dim, num_heads)
+        self.embedding = Embedding(vocab_size, embedding_dim)
+        self.positional_encoding = PositionalEncoding(max_length, embedding_dim)
+        self.decoder_layers = nn.ModuleList([DecoderLayer(embedding_dim, feed_forward_dim, num_heads)
                                              for _ in range(num_layers)])
+        self.dense_layer = nn.Linear(embedding_dim, vocab_size)
 
-    def forward(self, batch, encoder_output, mask):
-        output = batch
+    def forward(self, batch, encoder_output, padding_mask, attention_mask):
+        embedding = self.embedding(batch)
+        output = self.positional_encoding(embedding)
+
         for decoder_layer in self.decoder_layers:
-            output = decoder_layer(batch, encoder_output, mask)
+            output = decoder_layer(output, encoder_output, padding_mask, attention_mask)
+
+        output = self.dense_layer(output)
 
         return output
  
@@ -355,7 +352,9 @@ class StackedDecoder(nn.Module):
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model_dim = 512
+    feed_forward_dim = 2048
     num_layers = 6
+    num_heads = 8
     batch_size = 64
     max_length = 20
     learning_rate = 0.001
@@ -377,8 +376,8 @@ if __name__ == "__main__":
     
     
     # Training
-    encoder = Encoder().to(device)
-    decoder = Decoder().to(device)
+    encoder = StackedEncoder(vocab_size["de"], max_length, model_dim, feed_forward_dim, num_heads, num_layers).to(device)
+    decoder = StackedDecoder(vocab_size["en"], max_length, model_dim, feed_forward_dim, num_heads, num_layers).to(device)
     criterion = nn.CrossEntropyLoss(reduction='none')
     encoder_optimizer = torch.optim.Adam(encoder.parameters(), lr=learning_rate)
     decoder_optimizer = torch.optim.Adam(decoder.parameters(), lr=learning_rate)
