@@ -90,13 +90,18 @@ def create_dataloader_from_text_data(text_data: dataset , batch_size: int) -> Da
     return dataloader
 
 
-def create_padding_mask(src_batch: Tensor, tgt_batch: Tensor) -> tuple:
-    src_padding_mask = (src_batch != pad_idx)
-    tgt_padding_mask = (tgt_batch != pad_idx)
+def create_padding_mask_for_attention(batch: Tensor) -> Tensor:
+    padding_mask = (batch != pad_idx)
+    padding_mask = padding_mask.unsqueeze(1).repeat(1, batch.size(1), 1)
 
-    return src_padding_mask, tgt_padding_mask   
+    return padding_mask
 
-def create_attention_mask(tgt_batch: Tensor) -> Tensor:
+def create_padding_mask_for_loss(batch: Tensor) -> Tensor:
+    padding_mask = (batch != pad_idx)
+
+    return padding_mask
+
+def create_look_ahead_mask_for_attention(tgt_batch: Tensor) -> Tensor:
     batch_size, tgt_length = tgt_batch.size()
     tgt_attention_mask = torch.tril(torch.ones((tgt_length, tgt_length))).expand(batch_size, tgt_length, tgt_length)
     tgt_attention_mask = tgt_attention_mask.to(device)
@@ -104,38 +109,38 @@ def create_attention_mask(tgt_batch: Tensor) -> Tensor:
     return tgt_attention_mask
 
 
-def process_batch(batch, calculate_gradients=True):
+def process_batch(batch: Tensor, mode='train') -> float:
     src_batch, tgt_batch = batch
     src_batch, tgt_batch = src_batch.to(device), tgt_batch.to(device)
-    src_padding_mask, tgt_padding_mask = create_padding_mask(src_batch, tgt_batch)
-    src_padding_mask = src_padding_mask.unsqueeze(1)
-    tgt_attention_mask = create_attention_mask(tgt_batch)
 
-    if calculate_gradients:
-        encoder_optimizer.zero_grad()
-        decoder_optimizer.zero_grad()
+    if mode == 'train':
+        transformer_optimizer.zero_grad()
+        decoder_output = transformer(src_batch, tgt_batch)
 
-    encoder_output = encoder(src_batch, src_padding_mask)
-    decoder_output = decoder(tgt_batch, encoder_output, src_padding_mask, tgt_attention_mask)
+    if mode == 'test':
+        decoder_output = transformer.greedy_decode(src_batch, tgt_batch)
+        random_index = random.randint(0, len(src_batch) - 1)
+        print_translation(src_batch[random_index], tgt_batch[random_index], decoder_output[random_index])
 
     decoder_output = decoder_output[:, :-1].reshape(-1, vocab_size[tgt_language])
     target = tgt_batch[:, 1:].reshape(-1)
+    tgt_padding_mask = create_padding_mask_for_loss(tgt_batch)
     tgt_padding_mask = tgt_padding_mask[:, 1:].reshape(-1)
     loss = criterion(decoder_output, target)
     loss = torch.sum(loss * tgt_padding_mask) / torch.sum(tgt_padding_mask)
 
-    if calculate_gradients:
+    if mode == 'train':
         loss.backward()
-        encoder_optimizer.step()
-        decoder_optimizer.step()
+        transformer_optimizer.step()
 
     return loss.item()
+    
 
 def train():
     total_loss = 0
     num_batches = len(train_dataloader)
     for batch in train_dataloader:
-        loss = process_batch(batch, calculate_gradients=True)
+        loss = process_batch(batch, 'train')
         total_loss += loss
 
     return total_loss / num_batches
@@ -145,14 +150,14 @@ def test():
     num_batches = len(test_dataloader)
     with torch.no_grad():
         for batch in test_dataloader:
-            loss = process_batch(batch, calculate_gradients=False)
+            loss = process_batch(batch, 'test')
             total_loss += loss
 
     return total_loss / num_batches
 
 
 def print_translation(src_sequence: Tensor, tgt_sequence: Tensor, output_sequence: Tensor):
-    output_sequence = output_sequence.argmax(dim=1)
+    output_sequence = output_sequence.argmax(dim=-1)
     sequences = {'Source': src_sequence, 'Target': tgt_sequence, 'Output': output_sequence}
 
     for domain, sequence in sequences.items():
@@ -211,20 +216,13 @@ class ScaledDotProductAttention(nn.Module):
         self.embedding_dim = embedding_dim
         self.attention_dim = attention_dim
         self.scale = torch.sqrt(torch.tensor(attention_dim).float())
-        self.Wq = nn.Linear(embedding_dim, attention_dim)
-        self.Wk = nn.Linear(embedding_dim, attention_dim)
-        self.Wv = nn.Linear(embedding_dim, attention_dim)
 
     def forward(self, query, key, value, mask=None):
-        query = self.Wq(query)
-        key = self.Wk(key)
-        value = self.Wv(value)
-
-        key = key.transpose(1, 2)
-        attention_score = torch.bmm(query, key) / self.scale
+        key = key.transpose(-2, -1)
+        attention_score = torch.matmul(query, key) / self.scale
         attention_score = attention_score.masked_fill(mask == 0, -1e10)
         attention_distribution = torch.softmax(attention_score, dim=-1)
-        attention_value = torch.bmm(attention_distribution, value)
+        attention_value = torch.matmul(attention_distribution, value)
 
         return attention_value
 
@@ -234,17 +232,24 @@ class MultiHeadAttention(nn.Module):
         self.attention_dim = embedding_dim // num_heads
         assert self.attention_dim * num_heads == embedding_dim
 
-        self.attention_heads = nn.ModuleList([ScaledDotProductAttention(embedding_dim, self.attention_dim)
-                                               for _ in range(num_heads)])
+        self.scaled_dot_product_attention = ScaledDotProductAttention(embedding_dim, self.attention_dim)
+        self.Wq = nn.Linear(embedding_dim, self.attention_dim * num_heads)
+        self.Wk = nn.Linear(embedding_dim, self.attention_dim * num_heads)
+        self.Wv = nn.Linear(embedding_dim, self.attention_dim * num_heads)
         self.Wo = nn.Linear(embedding_dim, embedding_dim)
         self.num_heads = num_heads
 
     def forward(self, query, key, value, mask=None):
-        attention_values = []
+        batch_size = query.size(0)
+        max_length = query.size(1)
 
-        attention_values = [attention_head(query, key, value, mask) for attention_head in self.attention_heads]
-        concatenated_attention_values = torch.cat(attention_values, dim=-1)
-        output = self.Wo(concatenated_attention_values)
+        query = self.Wq(query).reshape(batch_size, max_length, self.num_heads, self.attention_dim).transpose(1, 2)
+        key = self.Wk(key).reshape(batch_size, max_length, self.num_heads, self.attention_dim).transpose(1, 2)
+        value = self.Wv(value).reshape(batch_size, max_length, self.num_heads, self.attention_dim).transpose(1, 2)
+
+        attention_values = self.scaled_dot_product_attention(query, key, value, mask)   # (batch_size, num_heads, max_length, attention_dim)
+        attention_values = attention_values.transpose(1, 2).reshape(batch_size, max_length, self.num_heads * self.attention_dim)
+        output = self.Wo(attention_values)
 
         return output
         
@@ -347,6 +352,45 @@ class StackedDecoder(nn.Module):
         output = self.dense_layer(output)
 
         return output
+    
+class Transformer(nn.Module):
+    def __init__(self, vocab_size, max_length, embedding_dim, feed_forward_dim, num_heads, num_layers):
+        super(Transformer, self).__init__()
+        self.encoder = StackedEncoder(vocab_size[src_language], max_length, embedding_dim, feed_forward_dim, num_heads, num_layers)
+        self.decoder = StackedDecoder(vocab_size[tgt_language], max_length, embedding_dim, feed_forward_dim, num_heads, num_layers)
+
+    def greedy_decode(self, src_batch, tgt_batch):
+        batch_size = src_batch.size(0)
+        max_length = src_batch.size(1)
+        decoder_input = torch.zeros((batch_size, max_length), dtype=torch.long).to(device)
+        decoder_input[:, 0] = sos_idx
+        decoder_output = torch.zeros((batch_size, max_length), dtype=torch.long).to(device)
+        src_padding_mask = create_padding_mask_for_attention(src_batch)
+        src_padding_mask = src_padding_mask.unsqueeze(1)
+        tgt_attention_mask = create_look_ahead_mask_for_attention(tgt_batch)
+        tgt_attention_mask = tgt_attention_mask.unsqueeze(1)
+        tgt_attention_mask_step = torch.zeros_like(tgt_attention_mask)
+
+        encoder_output = self.encoder(src_batch, src_padding_mask)
+        for step in range(max_length):
+            tgt_attention_mask_step[:, :, :step+1, :step+1] = tgt_attention_mask[:, :, :step+1, :step+1]
+            decoder_output_tensor = self.decoder(decoder_input, encoder_output, src_padding_mask, tgt_attention_mask_step)
+            decoder_output_tensor = decoder_output_tensor[:, step, :]
+            decoder_output[:, step] = decoder_output_tensor.argmax(dim=-1)
+            if step < (max_length - 1):
+                decoder_input[:, step+1] = decoder_output[:, step]
+
+        return decoder_output
+
+    def forward(self, src_batch, tgt_batch):
+        src_padding_mask = create_padding_mask_for_attention    (src_batch)
+        src_padding_mask = src_padding_mask.unsqueeze(1)
+        encoder_output = self.encoder(src_batch, src_padding_mask)
+        tgt_attention_mask = create_look_ahead_mask_for_attention(tgt_batch)
+        tgt_attention_mask = tgt_attention_mask.unsqueeze(1)
+        decoder_output = self.decoder(tgt_batch, encoder_output, src_padding_mask, tgt_attention_mask)
+
+        return decoder_output
  
 
 if __name__ == "__main__":
@@ -376,11 +420,9 @@ if __name__ == "__main__":
     
     
     # Training
-    encoder = StackedEncoder(vocab_size["de"], max_length, model_dim, feed_forward_dim, num_heads, num_layers).to(device)
-    decoder = StackedDecoder(vocab_size["en"], max_length, model_dim, feed_forward_dim, num_heads, num_layers).to(device)
+    transformer = Transformer(vocab_size, max_length, model_dim, feed_forward_dim, num_heads, num_layers).to(device)
     criterion = nn.CrossEntropyLoss(reduction='none')
-    encoder_optimizer = torch.optim.Adam(encoder.parameters(), lr=learning_rate)
-    decoder_optimizer = torch.optim.Adam(decoder.parameters(), lr=learning_rate)
+    transformer_optimizer = torch.optim.Adam(transformer.parameters(), lr=learning_rate)
     
     for epoch in range(100):
         train_loss = train()
