@@ -4,19 +4,19 @@
 import os
 import random
 import torch
-from torch import nn
-from torch.utils.data import DataLoader
+from torch import nn, Tensor
+from torch.utils.data import TensorDataset, DataLoader, dataset
 from torchtext.datasets import Multi30k
 from torchtext.data.utils import get_tokenizer
 from torchtext.vocab import build_vocab_from_iterator
-from torch import nn, Tensor
-from torch.utils.data import TensorDataset, DataLoader, dataset
 from torch.nn.utils.rnn import pad_sequence
+from dataclasses import dataclass, field
+
 
     
 def tokenize_text_data(raw_text_iter: str, language: str) -> list:
     tokens = tokenizer[language](raw_text_iter)
-    tokens = ['<sos>'] + tokens + ['<eos>']
+    tokens = special_symbols[sos_idx]+ tokens + special_symbols[eos_idx]
 
     return tokens
 
@@ -33,10 +33,8 @@ def transform_tokens_to_tensor(tokens: list, language: str) -> Tensor:
     return tensor
 
 def longer_than_max_length(tokens: list, language: str) -> bool:
-    if len(tokens) > max_length:
-        return True
-    else:
-        return False
+    return len(tokens) > max_length
+
     
 def yield_tokens(tokenized_sentences: list) -> list:
     for sentence in tokenized_sentences:
@@ -44,6 +42,13 @@ def yield_tokens(tokenized_sentences: list) -> list:
 
 
 def create_vocab_from_text_data() -> tuple:
+    """
+    Creates vocabulary from text data.
+
+    Returns:
+        A tuple containing dictionaries for vocabulary and vocabulary size for each language in the language pair.
+    """
+    
     data_for_dict = Multi30k(split="train", language_pair=language_pair) 
     sentences = {src_language: [], tgt_language: []}
     vocab, vocab_size = {}, {}
@@ -66,6 +71,17 @@ def create_vocab_from_text_data() -> tuple:
     
 
 def create_dataloader_from_text_data(text_data: dataset , batch_size: int) -> DataLoader:
+    """
+    Create a DataLoader from text data.
+
+    Args:
+        text_data (dataset): The text data to create the DataLoader from.
+        batch_size (int): The batch size for the DataLoader.
+
+    Returns:
+        DataLoader: The created DataLoader.
+
+    """
     src_batch, tgt_batch = [], []
 
     for src_sentence, tgt_sentence in text_data:
@@ -110,6 +126,17 @@ def create_look_ahead_mask_for_attention(tgt_batch: Tensor) -> Tensor:
 
 
 def process_batch(batch: Tensor, mode='train') -> float:
+    """
+    Process a batch of data using the Transformer model.
+
+    Args:
+        batch (Tensor): The input batch of data, consisting of source and target sequences.
+        mode (str, optional): The mode of operation. Defaults to 'train'.
+
+    Returns:
+        float: The loss value for the processed batch.
+
+    """
     src_batch, tgt_batch = batch
     src_batch, tgt_batch = src_batch.to(device), tgt_batch.to(device)
 
@@ -157,6 +184,18 @@ def test():
 
 
 def print_translation(src_sequence: Tensor, tgt_sequence: Tensor, output_sequence: Tensor):
+    """
+    Prints the translation of the source sequence, target sequence, and output sequence.
+
+    Args:
+        src_sequence (Tensor): The source sequence tensor.
+        tgt_sequence (Tensor): The target sequence tensor.
+        output_sequence (Tensor): The output sequence tensor.
+
+    Returns:
+        None
+    """
+    
     output_sequence = output_sequence.argmax(dim=-1)
     sequences = {'Source': src_sequence, 'Target': tgt_sequence, 'Output': output_sequence}
 
@@ -175,6 +214,27 @@ def print_translation(src_sequence: Tensor, tgt_sequence: Tensor, output_sequenc
             print(f"{domain}: {' '.join([vocab[tgt_language].get_itos()[idx] for idx in sequence_before_eos_tensor])}")
         
     print("\n")
+
+
+@dataclass
+class TransformerConfig:
+    device: str = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model_dim: int = 512
+    feed_forward_dim: int = 2048
+    num_layers: int = 6
+    num_heads: int = 8
+    batch_size: int = 64
+    max_length: int = 20
+    learning_rate: float = 0.001
+    src_language: str = "en"
+    tgt_language: str = "de"
+    language_pair: tuple = (src_language, tgt_language)
+    special_symbols: list = field(default_factory=lambda: ['<unk>', '<sos>', '<eos>', '<pad>'])
+    special_symbols_indices: dict = field(default_factory=lambda: {symbol: idx for idx, symbol in enumerate(special_symbols)})
+    tokenizer: dict = field(default_factory=lambda: {src_language : get_tokenizer('spacy', language='en_core_web_sm'),
+                                                     tgt_language : get_tokenizer('spacy', language='de_core_news_sm')})
+    vocab: dict = field(default_factory=lambda: {src_language: None, tgt_language: None})
+    vocab_size: dict = field(default_factory=lambda: {src_language: None, tgt_language: None})
 
 
 class Embedding(nn.Module):
@@ -409,25 +469,35 @@ if __name__ == "__main__":
     unk_idx, sos_idx, eos_idx, pad_idx = 0, 1, 2, 3
     tokenizer = {src_language : get_tokenizer('spacy', language='de_core_news_sm'),
                  tgt_language : get_tokenizer('spacy', language='en_core_web_sm')}
+    config = TransformerConfig()
 
     # Each is a dictionary which has key: language
     vocab, vocab_size = create_vocab_from_text_data()
+    config.vocab, config.vocab_size = vocab, vocab_size
     
     # Multi30k test set has encoding problem, so we use train and valid set for training and testing
-    train_data, test_data = Multi30k(split=('train', 'valid'), language_pair=language_pair)        
-    train_dataloader = create_dataloader_from_text_data(train_data, batch_size)
-    test_dataloader = create_dataloader_from_text_data(test_data, batch_size)
+    train_data, test_data = Multi30k(split=('train', 'valid'), language_pair=config.language_pair)        
+    train_dataloader = create_dataloader_from_text_data(train_data, config.batch_size)
+    test_dataloader = create_dataloader_from_text_data(test_data, config.batch_size)
     
     
     # Training
-    transformer = Transformer(vocab_size, max_length, model_dim, feed_forward_dim, num_heads, num_layers).to(device)
+    config_params = {
+        'vocab_size': config.vocab_size, 
+        'max_length': config.max_length, 
+        'model_dim': config.model_dim, 
+        'feed_forward_dim': config.feed_forward_dim, 
+        'num_heads': config.num_heads, 
+        'num_layers': config.num_layers
+    }
+    transformer = Transformer(**config_params).to(config.device)
     criterion = nn.CrossEntropyLoss(reduction='none')
     transformer_optimizer = torch.optim.Adam(transformer.parameters(), lr=learning_rate)
     
-    for epoch in range(100):
+    for epoch in range(50):
         train_loss = train()
         
-        if (epoch + 1) % 10 == 0:
+        if (epoch + 1) % 5 == 0:
             print('Epoch:', '%04d' % (epoch + 1), 'cost =', '{:.6f}'.format(train_loss))
     
     # Test
