@@ -14,20 +14,34 @@ from torch.utils.data import TensorDataset, DataLoader, dataset
 from torch.nn.utils.rnn import pad_sequence
 
     
-def tokenize_text_data(raw_text_iter: str, language: str) -> list:
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+MODEL_DIM = 128
+FEED_FORWARD_DIM = 512
+NUM_LAYERS = 6
+NUM_HEADS = 8
+BATCH_SIZE = 512
+MAX_LENGTH = 20
+LEARNING_RATE = 0.001
+EPOCH = 50
+SRC_LANGUAGE = "de"
+TGT_LANGUAGE = "en"
+UNK_IDX, SOS_IDX, EOS_IDX, PAD_IDX = 0, 1, 2, 3
+
+    
+def tokenize_seq_and_add_special_symbols(raw_text_iter: str, language: str) -> list:
     tokens = tokenizer[language](raw_text_iter)
     tokens = ['<sos>'] + tokens + ['<eos>']
 
     return tokens
 
-def map_token_to_index(tokens: list, language: str) -> list:
+def map_tokens_to_indicies(tokens: list, language: str) -> list:
     indices = [vocab[language][token] for token in tokens]
 
     return indices
     
 
 def transform_tokens_to_tensor(tokens: list, language: str) -> Tensor:
-    indices = map_token_to_index(tokens, language)
+    indices = map_tokens_to_indicies(tokens, language)
     tensor = torch.tensor(indices, dtype=torch.long)
 
     return tensor
@@ -49,17 +63,18 @@ def create_vocab_from_text_data() -> tuple:
     sentences = {SRC_LANGUAGE: [], TGT_LANGUAGE: []}
     vocab, vocab_size = {}, {}
 
+    # Text data is tokenized and added special symbols
     for src_sentence, tgt_sentence in data_for_dict:
-        src_sentence = tokenize_text_data(src_sentence, SRC_LANGUAGE)
-        tgt_sentence = tokenize_text_data(tgt_sentence, TGT_LANGUAGE)
+        src_sentence = tokenize_seq_and_add_special_symbols(src_sentence, SRC_LANGUAGE)
+        tgt_sentence = tokenize_seq_and_add_special_symbols(tgt_sentence, TGT_LANGUAGE)
         if longer_than_max_length(src_sentence, SRC_LANGUAGE) or longer_than_max_length(tgt_sentence, TGT_LANGUAGE):
             continue
         sentences[SRC_LANGUAGE].append(src_sentence)
         sentences[TGT_LANGUAGE].append(tgt_sentence)
 
-
+    # Build vocabulary
     for lang in language_pair:
-        vocab[lang] = build_vocab_from_iterator(yield_tokens(sentences[lang]), specials=special_symbols, min_freq=2)
+        vocab[lang] = build_vocab_from_iterator(yield_tokens(sentences[lang]), specials=special_symbols, min_freq=1)
         vocab[lang].set_default_index(vocab[lang]['<unk>'])
         vocab_size[lang] = len(vocab[lang])
 
@@ -69,9 +84,10 @@ def create_vocab_from_text_data() -> tuple:
 def create_dataloader_from_text_data(text_data: dataset , batch_size: int) -> DataLoader:
     src_batch, tgt_batch = [], []
 
+    # Text data is tokenized and padded
     for src_sentence, tgt_sentence in text_data:
-        src_sentence = tokenize_text_data(src_sentence, SRC_LANGUAGE)
-        tgt_sentence = tokenize_text_data(tgt_sentence, TGT_LANGUAGE)
+        src_sentence = tokenize_seq_and_add_special_symbols(src_sentence, SRC_LANGUAGE)
+        tgt_sentence = tokenize_seq_and_add_special_symbols(tgt_sentence, TGT_LANGUAGE)
         if longer_than_max_length(src_sentence, SRC_LANGUAGE) or longer_than_max_length(tgt_sentence, TGT_LANGUAGE):
             continue
         src_sentence = transform_tokens_to_tensor(src_sentence, SRC_LANGUAGE)
@@ -101,6 +117,7 @@ def create_padding_mask_for_attention(batch: Tensor, pad_idx: int) -> Tensor:
     return padding_mask.to(DEVICE) # (batch_size, 1, max_length, max_length)
 
 def create_padding_mask_for_loss(batch: Tensor, pad_idx: int) -> Tensor:
+    # Padding mask for loss is used for masking loss of padded tokens
     padding_mask = (batch != pad_idx)
 
     return padding_mask.to(DEVICE) # (batch_size, max_length)
@@ -147,7 +164,7 @@ def process_batch_for_test(model: nn.Module,
     
     src_padding_mask = create_padding_mask_for_attention(src_batch, PAD_IDX)
     tgt_padding_mask = create_look_ahead_mask_for_attention(tgt_batch)
-    decoder_output = model.greedy_decode(src_batch, src_padding_mask, tgt_padding_mask)
+    decoder_output = model.decode(src_batch, src_padding_mask, tgt_padding_mask)
 
     for i in range(BATCH_SIZE):
         print_translation(src_batch[i], tgt_batch[i], decoder_output[i])
@@ -157,7 +174,9 @@ def calculate_loss(decoder_output: Tensor,
                    tgt_batch: Tensor,
                    criterion: nn.Module,
                    ) -> float:
-    
+    # Remove <sos> token for target batch
+    # decoder_output: (batch_size, max_length, vocab_size)
+    # target: (batch_size, max_length)
     decoder_output = decoder_output[:, :-1].reshape(-1, vocab_size[TGT_LANGUAGE])
     target = tgt_batch[:, 1:].reshape(-1)
     tgt_padding_mask = create_padding_mask_for_loss(tgt_batch, PAD_IDX)
@@ -195,12 +214,13 @@ def print_translation(src_sequence: Tensor, tgt_sequence: Tensor, output_sequenc
     sequences = {'Source': src_sequence, 'Target': tgt_sequence, 'Output': output_sequence}
 
     for domain, sequence in sequences.items():
-        '''eos_index = (sequence == eos_idx).nonzero(as_tuple=True)
+        # Truncate before <eos> token
+        eos_index = (sequence == EOS_IDX).nonzero(as_tuple=True)
         if len(eos_index) > 0:
             first_eos_index = eos_index[0][0].item()
             sequence_before_eos_tensor = sequence[:first_eos_index]
-        else:'''
-        sequence_before_eos_tensor = sequence
+        else:
+            sequence_before_eos_tensor = sequence
             
         if domain == 'Source':   
             # Ex) "Source: A man who just came from a swim"
@@ -230,7 +250,7 @@ class PositionalEncoding(nn.Module):
         position = torch.arange(max_length).unsqueeze(1)
         div_term = torch.pow(10000, torch.arange(0, embedding_dim, 2).float() / embedding_dim)
 
-        return position / div_term
+        return position / div_term  # (max_length, embedding_dim / 2)
 
     def create_positional_encoding(self, max_length, embedding_dim):
         angles = self.get_angles(max_length, embedding_dim)
@@ -393,20 +413,25 @@ class Transformer(nn.Module):
         self.encoder = StackedEncoder(vocab_size[SRC_LANGUAGE], max_length, embedding_dim, feed_forward_dim, num_heads, num_layers)
         self.decoder = StackedDecoder(vocab_size[TGT_LANGUAGE], max_length, embedding_dim, feed_forward_dim, num_heads, num_layers)
 
-    def greedy_decode(self, src_batch, src_padding_mask, tgt_attention_mask):
+    def decode(self, src_batch, src_padding_mask, tgt_attention_mask):
         batch_size = src_batch.size(0)
         max_length = src_batch.size(1)
+
         decoder_input = torch.zeros(batch_size, max_length, dtype=torch.long).to(DEVICE)
         decoder_input[:, 0] = SOS_IDX
         decoder_output = torch.zeros(batch_size, max_length, dtype=torch.long).to(DEVICE)
+
         tgt_attention_mask_step = torch.zeros_like(tgt_attention_mask)
 
         encoder_output = self.encoder(src_batch, src_padding_mask)
         for step in range(max_length):
+            # Masked attention mask so that decoder can only see predicted tokens
             tgt_attention_mask_step[:, :, :step+1, :step+1] = tgt_attention_mask[:, :, :step+1, :step+1]
+
             decoder_output_tensor = self.decoder(decoder_input, encoder_output, src_padding_mask, tgt_attention_mask_step)
             decoder_output_tensor = decoder_output_tensor[:, step, :]
             decoder_output[:, step] = decoder_output_tensor.argmax(dim=-1)
+
             if step < (max_length - 1):
                 decoder_input[:, step+1] = decoder_output[:, step]
 
@@ -420,18 +445,6 @@ class Transformer(nn.Module):
  
 
 if __name__ == "__main__":
-    DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    MODEL_DIM = 128
-    FEED_FORWARD_DIM = 512
-    NUM_LAYERS = 6
-    NUM_HEADS = 8
-    BATCH_SIZE = 512
-    MAX_LENGTH = 20
-    LEARNING_RATE = 0.001
-    EPOCH = 50
-    SRC_LANGUAGE = "de"
-    TGT_LANGUAGE = "en"
-    UNK_IDX, SOS_IDX, EOS_IDX, PAD_IDX = 0, 1, 2, 3
     language_pair = (SRC_LANGUAGE, TGT_LANGUAGE)
     special_symbols = ['<unk>', '<sos>', '<eos>', '<pad>']
     tokenizer = {SRC_LANGUAGE : get_tokenizer('spacy', language='de_core_news_sm'),
